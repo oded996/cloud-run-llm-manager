@@ -243,9 +243,15 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
                 if (newLogs.length > 0) {
                     const shouldScroll = logContainer ? (logContainer.scrollTop + logContainer.clientHeight) >= logContainer.scrollHeight - 20 : false;
                     
+                    // Defensively update the timestamp of the last log received
                     const lastLog = newLogs[newLogs.length - 1];
-                    const lastTimestamp = new Date(lastLog.timestamp.seconds * 1000 + lastLog.timestamp.nanos / 1000000).toJSON();
-                    lastLogTimestamp.current = lastTimestamp;
+                    if (lastLog && lastLog.timestamp && typeof lastLog.timestamp.seconds === 'number') {
+                        const lastTimestampISO = new Date(lastLog.timestamp.seconds * 1000 + (lastLog.timestamp.nanos || 0) / 1000000).toJSON();
+                        // Ensure we don't assign a null value from an invalid date
+                        if (lastTimestampISO) {
+                            lastLogTimestamp.current = lastTimestampISO;
+                        }
+                    }
 
                     setLogs(prevLogs => {
                         const updatedLogs = [...prevLogs, ...newLogs];
@@ -326,7 +332,11 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
                         {logError && <p className="text-red-500">{logError}</p>}
                         {logs.map((log, i) => (
                             <p key={i}>
-                                <span className="text-gray-400">{new Date(log.timestamp).toLocaleString()}</span>: {typeof log.message === 'object' ? JSON.stringify(log.message) : log.message}
+                                <span className="text-gray-400">
+                                    {log.timestamp && typeof log.timestamp.seconds === 'number'
+                                        ? new Date(log.timestamp.seconds * 1000 + (log.timestamp.nanos || 0) / 1000000).toLocaleString()
+                                        : 'Invalid date'}
+                                </span>: {typeof log.message === 'object' ? JSON.stringify(log.message) : log.message}
                             </p>
                         ))}
                     </div>
@@ -336,6 +346,7 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
             </div>
         </div>
     );
+
 };
 
 export default Services;
