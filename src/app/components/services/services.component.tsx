@@ -182,6 +182,7 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
     const [logs, setLogs] = useState<any[]>([]);
     const [logError, setLogError] = useState<string | null>(null);
     const logContainerRef = useRef<HTMLDivElement>(null);
+    const lastLogTimestamp = useRef<string | null>(null);
 
     const region = initialService.name.split('/')[3];
     const serviceName = initialService.name.split('/')[5];
@@ -220,12 +221,16 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
         }
     }, [project.projectId, region, serviceName, status]);
 
-    const lastLogTimestamp = useRef<string | null>(null);
+    const pollIntervalRef = useRef<number>(15000); // Start with a 15-second interval
+    const pollTimeoutId = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
         const logContainer = logContainerRef.current;
 
         const fetchLogs = async () => {
+            // Clear any existing timeout before starting a new fetch
+            if (pollTimeoutId.current) clearTimeout(pollTimeoutId.current);
+
             try {
                 let url = `/api/services/logs?projectId=${project.projectId}&region=${region}&serviceName=${serviceName}`;
                 if (lastLogTimestamp.current) {
@@ -238,16 +243,18 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
                     throw new Error(errorData.error || 'Failed to fetch logs.');
                 }
 
+                // If successful, reset the poll interval to the base value
+                pollIntervalRef.current = 15000;
+                setLogError(null); // Clear previous errors
+
                 const newLogs = await response.json();
 
                 if (newLogs.length > 0) {
                     const shouldScroll = logContainer ? (logContainer.scrollTop + logContainer.clientHeight) >= logContainer.scrollHeight - 20 : false;
                     
-                    // Defensively update the timestamp of the last log received
                     const lastLog = newLogs[newLogs.length - 1];
                     if (lastLog && lastLog.timestamp && typeof lastLog.timestamp.seconds === 'number') {
                         const lastTimestampISO = new Date(lastLog.timestamp.seconds * 1000 + (lastLog.timestamp.nanos || 0) / 1000000).toJSON();
-                        // Ensure we don't assign a null value from an invalid date
                         if (lastTimestampISO) {
                             lastLogTimestamp.current = lastTimestampISO;
                         }
@@ -255,7 +262,6 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
 
                     setLogs(prevLogs => {
                         const updatedLogs = [...prevLogs, ...newLogs];
-                        // Keep the log buffer from growing indefinitely
                         if (updatedLogs.length > 3000) {
                             return updatedLogs.slice(updatedLogs.length - 3000);
                         }
@@ -265,25 +271,36 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
                     if (shouldScroll && logContainer) {
                         setTimeout(() => {
                             logContainer.scrollTop = logContainer.scrollHeight;
-                        }, 100); // A small delay to allow rendering
+                        }, 100);
                     }
                 }
             } catch (err: any) {
-                setLogError(err.message);
-                // Stop polling on error
-                if (intervalId) clearInterval(intervalId);
+                console.error("Log fetch error:", err.message);
+                
+                let userMessage = `Could not fetch new logs: ${err.message}.`;
+                // Provide a more user-friendly message for quota errors.
+                if (err.message && err.message.includes('RESOURCE_EXHAUSTED')) {
+                    userMessage = 'Log quota limit reached. Polling less frequently.';
+                }
+                
+                setLogError(`${userMessage} Retrying...`);
+                
+                // Implement exponential backoff
+                pollIntervalRef.current = Math.min(pollIntervalRef.current * 2, 60000); // Double interval, max 60s
+            } finally {
+                // Schedule the next poll
+                pollTimeoutId.current = setTimeout(fetchLogs, pollIntervalRef.current);
             }
         };
 
-        // Fetch logs immediately on component mount
+        // Start the polling
         fetchLogs();
-
-        // Then, poll for new logs every 3 seconds
-        const intervalId = setInterval(fetchLogs, 3000);
 
         // Cleanup on component unmount
         return () => {
-            clearInterval(intervalId);
+            if (pollTimeoutId.current) {
+                clearTimeout(pollTimeoutId.current);
+            }
         };
     }, [project.projectId, region, serviceName]);
 
@@ -329,13 +346,21 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
                 <div className="bg-white border border-gray-200 rounded-md">
                     <div className="p-4 border-b"><h2 className="text-base font-medium">Live Logs</h2></div>
                     <div ref={logContainerRef} className="p-4 font-mono text-xs h-64 overflow-y-auto bg-gray-900 text-white rounded-b-md whitespace-pre-wrap break-words">
-                        {logError && <p className="text-red-500">{logError}</p>}
+                        {logError && <p className="text-yellow-400">{logError}</p>}
                         {logs.map((log, i) => (
                             <p key={i}>
                                 <span className="text-gray-400">
-                                    {log.timestamp && typeof log.timestamp.seconds === 'number'
-                                        ? new Date(log.timestamp.seconds * 1000 + (log.timestamp.nanos || 0) / 1000000).toLocaleString()
-                                        : 'Invalid date'}
+                                    {(() => {
+                                        const ts = log.timestamp;
+                                        if (ts && typeof ts.seconds === 'number') {
+                                            return new Date(ts.seconds * 1000 + (ts.nanos || 0) / 1000000).toLocaleString();
+                                        }
+                                        // Handle cases where timestamp might be a string or other formats, or missing.
+                                        if (ts && !isNaN(new Date(ts as any).getTime())) {
+                                            return new Date(ts as any).toLocaleString();
+                                        }
+                                        return 'No timestamp';
+                                    })()}
                                 </span>: {typeof log.message === 'object' ? JSON.stringify(log.message) : log.message}
                             </p>
                         ))}
@@ -346,6 +371,7 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
             </div>
         </div>
     );
+
 
 };
 
