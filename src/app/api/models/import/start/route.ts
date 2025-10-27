@@ -128,8 +128,7 @@ async function syncModelToGCS(
               gcsWriteStream.once('drain', pump);
             } else {
               // The buffer has space, so we can ask for the next chunk immediately.
-              // Using process.nextTick to avoid deep call stacks.
-              process.nextTick(pump);
+              pump();
             }
           }).catch(reject);
         }
