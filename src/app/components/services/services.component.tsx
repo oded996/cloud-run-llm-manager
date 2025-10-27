@@ -220,42 +220,64 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
         }
     }, [project.projectId, region, serviceName, status]);
 
+    const lastLogTimestamp = useRef<string | null>(null);
+
     useEffect(() => {
-        const eventSource = new EventSource(`/api/services/logs?projectId=${project.projectId}&region=${region}&serviceName=${serviceName}`);
-        
-        const handleNewLog = (event: MessageEvent) => {
-            const logContainer = logContainerRef.current;
-            const shouldScroll = logContainer ? (logContainer.scrollTop + logContainer.clientHeight) >= logContainer.scrollHeight - 20 : false;
+        const logContainer = logContainerRef.current;
 
-            const data = JSON.parse(event.data);
-            if (data.error) {
-                setLogError(data.error);
-                eventSource.close();
-            } else {
-                setLogs(prevLogs => {
-                    const newLogs = [...prevLogs, data];
-                    if (newLogs.length > 3000) {
-                        return newLogs.slice(newLogs.length - 3000);
-                    }
-                    return newLogs;
-                });
-
-                if (shouldScroll && logContainer) {
-                    setTimeout(() => {
-                        logContainer.scrollTop = logContainer.scrollHeight;
-                    }, 100);
+        const fetchLogs = async () => {
+            try {
+                let url = `/api/services/logs?projectId=${project.projectId}&region=${region}&serviceName=${serviceName}`;
+                if (lastLogTimestamp.current) {
+                    url += `&since=${lastLogTimestamp.current}`;
                 }
+
+                const response = await fetch(url);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to fetch logs.');
+                }
+
+                const newLogs = await response.json();
+
+                if (newLogs.length > 0) {
+                    const shouldScroll = logContainer ? (logContainer.scrollTop + logContainer.clientHeight) >= logContainer.scrollHeight - 20 : false;
+                    
+                    const lastLog = newLogs[newLogs.length - 1];
+                    const lastTimestamp = new Date(lastLog.timestamp.seconds * 1000 + lastLog.timestamp.nanos / 1000000).toJSON();
+                    lastLogTimestamp.current = lastTimestamp;
+
+                    setLogs(prevLogs => {
+                        const updatedLogs = [...prevLogs, ...newLogs];
+                        // Keep the log buffer from growing indefinitely
+                        if (updatedLogs.length > 3000) {
+                            return updatedLogs.slice(updatedLogs.length - 3000);
+                        }
+                        return updatedLogs;
+                    });
+
+                    if (shouldScroll && logContainer) {
+                        setTimeout(() => {
+                            logContainer.scrollTop = logContainer.scrollHeight;
+                        }, 100); // A small delay to allow rendering
+                    }
+                }
+            } catch (err: any) {
+                setLogError(err.message);
+                // Stop polling on error
+                if (intervalId) clearInterval(intervalId);
             }
         };
 
-        eventSource.onmessage = handleNewLog;
-        eventSource.onerror = () => {
-            setLogError('Log stream connection failed.');
-            eventSource.close();
-        };
+        // Fetch logs immediately on component mount
+        fetchLogs();
 
+        // Then, poll for new logs every 3 seconds
+        const intervalId = setInterval(fetchLogs, 3000);
+
+        // Cleanup on component unmount
         return () => {
-            eventSource.close();
+            clearInterval(intervalId);
         };
     }, [project.projectId, region, serviceName]);
 
