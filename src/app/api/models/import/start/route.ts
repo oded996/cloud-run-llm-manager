@@ -1,8 +1,5 @@
+
 import { Storage } from '@google-cloud/storage';
-import * as https from 'https';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 
 const METADATA_FILE_NAME = 'llm-manager-metadata.json';
 
@@ -89,62 +86,45 @@ async function syncModelToGCS(
         }
       }
 
-      const tempFilePath = path.join(os.tmpdir(), `llm-manager-${Date.now()}-${relativePath.replace(/\//g, '_')}`);
-      
-      try {
-        const pipeToTemp = (responseStream: import('http').IncomingMessage, resolve: () => void, reject: (reason?: any) => void) => {
-          const fileSize = file.size || 0;
-          let downloadedSize = 0;
-          const fileWriteStream = fs.createWriteStream(tempFilePath);
+      log(`File ${relativePath} not found in GCS. Downloading...`);
+      const downloadUrl = `https://huggingface.co/${modelId}/resolve/main/${relativePath}`;
+      const downloadResponse = await fetch(downloadUrl, { headers });
 
-          responseStream.on('data', (chunk) => {
-            downloadedSize += chunk.length;
+      if (!downloadResponse.ok || !downloadResponse.body) {
+        log(`Failed to download ${relativePath}: ${downloadResponse.statusText}`);
+        continue;
+      }
+
+      // 3. Stream the file from the download URL to GCS, reporting progress along the way.
+      await new Promise<void>((resolve, reject) => {
+        const fileSize = file.size || 0;
+        let downloadedSize = 0;
+
+        const gcsWriteStream = gcsFile.createWriteStream();
+        const reader = downloadResponse.body!.getReader();
+
+        const pump = () => {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              gcsWriteStream.end();
+              sendProgress(relativePath, fileSize, fileSize); // Final progress update
+              log(`Successfully uploaded ${relativePath} to GCS.`);
+              resolve();
+              return;
+            }
+
+            gcsWriteStream.write(value);
+            downloadedSize += value.length;
             sendProgress(relativePath, downloadedSize, fileSize);
+            pump();
+          }).catch(err => {
+            gcsWriteStream.destroy(err);
+            reject(err);
           });
-
-          responseStream.pipe(fileWriteStream)
-            .on('finish', resolve)
-            .on('error', reject);
         };
 
-        // STAGE 1: Download from Hugging Face to a temporary local file
-        log(`Downloading ${relativePath} to temporary file...`);
-        const downloadUrl = new URL(`https://huggingface.co/${modelId}/resolve/main/${relativePath}`);
-        const options = { headers: { ...headers, 'Accept': 'application/octet-stream' } };
-
-        await new Promise<void>((resolve, reject) => {
-          const fileWriteStream = fs.createWriteStream(tempFilePath);
-          https.get(downloadUrl, options, (response) => {
-            if (response.statusCode === 302 || response.statusCode === 301) {
-              const redirectUrl = response.headers.location;
-              if (redirectUrl) {
-                https.get(redirectUrl, options, (redirectedResponse) => {
-                  pipeToTemp(redirectedResponse, resolve, reject);
-                }).on('error', reject);
-                return;
-              }
-            }
-            pipeToTemp(response, resolve, reject);
-          }).on('error', reject);
-        });
-
-        // STAGE 2: Upload from the temporary file to GCS
-        log(`Download of ${relativePath} complete. Uploading to GCS...`);
-        sendProgress(relativePath, file.size, file.size); // Mark download as complete
-        
-        await bucket.upload(tempFilePath, {
-          destination: gcsPath,
-          // Optional: Add resumable upload configuration for very large files if needed
-        });
-
-        log(`Successfully uploaded ${relativePath} to GCS.`);
-
-      } finally {
-        // STAGE 3: Cleanup the temporary file
-        if (fs.existsSync(tempFilePath)) {
-          fs.unlinkSync(tempFilePath);
-        }
-      }
+        pump();
+      });
     }
 
     // 4. After all files are downloaded, update the metadata file.
