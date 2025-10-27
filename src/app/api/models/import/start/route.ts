@@ -1,5 +1,4 @@
 import { Storage } from '@google-cloud/storage';
-import { Readable, Transform } from 'stream';
 
 const METADATA_FILE_NAME = 'llm-manager-metadata.json';
 
@@ -100,31 +99,42 @@ async function syncModelToGCS(
         const fileSize = file.size || 0;
         let downloadedSize = 0;
 
-        const progressStream = new Transform({
-          transform(chunk, encoding, callback) {
-            downloadedSize += chunk.length;
-            sendProgress(relativePath, downloadedSize, fileSize);
-            this.push(chunk);
-            callback();
-          },
-        });
-
         const gcsWriteStream = gcsFile.createWriteStream();
-        
-        // Readable.fromWeb requires Node.js v16.5+ and converts the web stream to a Node.js stream
-        // This handles backpressure automatically.
-        Readable.fromWeb(downloadResponse.body as any)
-          .pipe(progressStream)
-          .pipe(gcsWriteStream)
-          .on('finish', () => {
+        const reader = downloadResponse.body!.getReader();
+
+        gcsWriteStream.on('finish', () => {
             sendProgress(relativePath, fileSize, fileSize); // Final progress update
             log(`Successfully uploaded ${relativePath} to GCS.`);
             resolve();
-          })
-          .on('error', (err) => {
+        });
+        gcsWriteStream.on('error', (err) => {
             log(`Error uploading ${relativePath}: ${err.message}`);
             reject(err);
-          });
+        });
+
+        const pump = () => {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              gcsWriteStream.end();
+              return;
+            }
+
+            downloadedSize += value.length;
+            sendProgress(relativePath, downloadedSize, fileSize);
+
+            // Write the data and check for backpressure.
+            if (!gcsWriteStream.write(value)) {
+              // The buffer is full, so we wait for it to drain before reading more.
+              gcsWriteStream.once('drain', pump);
+            } else {
+              // The buffer has space, so we can ask for the next chunk immediately.
+              // Using process.nextTick to avoid deep call stacks.
+              process.nextTick(pump);
+            }
+          }).catch(reject);
+        }
+
+        pump();
       });
     }
 
