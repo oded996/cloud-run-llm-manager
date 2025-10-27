@@ -1,4 +1,5 @@
 import { Storage } from '@google-cloud/storage';
+import { Readable, Transform } from 'stream';
 
 const METADATA_FILE_NAME = 'llm-manager-metadata.json';
 
@@ -99,30 +100,31 @@ async function syncModelToGCS(
         const fileSize = file.size || 0;
         let downloadedSize = 0;
 
-        const gcsWriteStream = gcsFile.createWriteStream();
-        const reader = downloadResponse.body!.getReader();
-
-        const pump = () => {
-          reader.read().then(({ done, value }) => {
-            if (done) {
-              gcsWriteStream.end();
-              sendProgress(relativePath, fileSize, fileSize); // Final progress update
-              log(`Successfully uploaded ${relativePath} to GCS.`);
-              resolve();
-              return;
-            }
-
-            gcsWriteStream.write(value);
-            downloadedSize += value.length;
+        const progressStream = new Transform({
+          transform(chunk, encoding, callback) {
+            downloadedSize += chunk.length;
             sendProgress(relativePath, downloadedSize, fileSize);
-            pump();
-          }).catch(err => {
-            gcsWriteStream.destroy(err);
+            this.push(chunk);
+            callback();
+          },
+        });
+
+        const gcsWriteStream = gcsFile.createWriteStream();
+        
+        // Readable.fromWeb requires Node.js v16.5+ and converts the web stream to a Node.js stream
+        // This handles backpressure automatically.
+        Readable.fromWeb(downloadResponse.body as any)
+          .pipe(progressStream)
+          .pipe(gcsWriteStream)
+          .on('finish', () => {
+            sendProgress(relativePath, fileSize, fileSize); // Final progress update
+            log(`Successfully uploaded ${relativePath} to GCS.`);
+            resolve();
+          })
+          .on('error', (err) => {
+            log(`Error uploading ${relativePath}: ${err.message}`);
             reject(err);
           });
-        };
-
-        pump();
       });
     }
 
