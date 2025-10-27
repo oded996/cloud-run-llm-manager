@@ -14,7 +14,7 @@ async function getIdentity() {
         const credentials = await client.getCredentials();
         if (credentials.client_email) {
             return {
-                type: 'Service Account',
+                type: 'serviceAccount',
                 email: credentials.client_email,
             };
         }

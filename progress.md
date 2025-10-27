@@ -13,6 +13,24 @@ This document serves as a running changelog to track the progress of the Cloud R
 
 ## 2025-10-27
 
+### Bug Fixes & UX Improvements
+
+- **"Models" Tab - Import Flow:**
+    - **Issue:** The bucket selection dropdown in the "Import Model" view only showed buckets previously managed by the tool, not all buckets in the project.
+    - **Solution:** Changed the frontend to call the `/api/gcs/buckets` endpoint to ensure all project buckets are listed.
+    - **Issue:** The UI for selecting or creating a bucket was unintuitive, using radio buttons and disabling parts of the form.
+    - **Solution:** Refactored the UI to use a single dropdown for bucket selection and a "Create New Bucket" button that toggles a dedicated creation form. This simplifies the workflow.
+    - **Issue:** A `ReferenceError` for `createBucket` would crash the component after the bucket selection UI was refactored.
+    - **Solution:** Removed the faulty logic from the "Next" button's `disabled` check.
+    - **Issue:** The import process was a rigid multi-step flow, requiring users to select a bucket before seeing the model details form.
+    - **Solution:** Removed the "Next" button and combined the bucket and model selection into a single, unified form that is always active, streamlining the process.
+    - **Issue:** Users had to manually type or paste full Hugging Face model IDs.
+    - **Solution:** Added clickable suggestion buttons below the "Model ID" input to quickly prefill popular Gemma models.
+    - **Issue:** The Hugging Face token field was a password input, obscuring the token.
+    - **Solution:** Changed the input type to "text" for better usability.
+    - **Issue:** The frontend was attempting to parse incomplete Server-Sent Events (SSE) messages during model download, causing console errors.
+    - **Solution:** Implemented a buffering mechanism to ensure only complete SSE messages are parsed, making the progress updates more robust.
+
 ### Implemented Features
 
 - **"Services" Tab - Live Data:**

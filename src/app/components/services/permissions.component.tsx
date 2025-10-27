@@ -134,7 +134,7 @@ export const PermissionsCard = ({ project, region, serviceName }: PermissionsCar
                     <button 
                       onClick={() => {
                         if (appIdentity) {
-                          const principal = appIdentity.type === 'Service Account' 
+                          const principal = appIdentity.type === 'serviceAccount' 
                             ? `serviceAccount:${appIdentity.email}` 
                             : `user:${appIdentity.email}`;
                           handleAddPrincipal(principal);

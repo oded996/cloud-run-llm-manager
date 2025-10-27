@@ -120,10 +120,13 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
 
 const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Project, onClose: () => void, onImportSuccess: () => void }) => {
     const [step, setStep] = useState(1);
-    const [managedBuckets, setManagedBuckets] = useState<Bucket[]>([]);
+    const [projectBuckets, setProjectBuckets] = useState<{name: string, location: string}[]>([]);
     const [isLoadingBuckets, setIsLoadingBuckets] = useState(true);
     const [targetBucket, setTargetBucket] = useState('');
-    const [createBucket, setCreateBucket] = useState(false);
+    
+    const [showCreateBucketForm, setShowCreateBucketForm] = useState(false);
+    const [isCreatingBucket, setIsCreatingBucket] = useState(false);
+    const [createBucketError, setCreateBucketError] = useState<string | null>(null);
     const [newBucketName, setNewBucketName] = useState(`${project.projectId}-llm-models`);
     const [newBucketRegion, setNewBucketRegion] = useState(SUPPORTED_REGIONS[0]?.name || '');
 
@@ -140,17 +143,17 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     const [downloadError, setDownloadError] = useState<string | null>(null);
 
     useEffect(() => {
-        const fetchManagedBuckets = async () => {
+        const fetchProjectBuckets = async () => {
             setIsLoadingBuckets(true);
             try {
-                const response = await fetch(`/api/models/buckets?projectId=${project.projectId}`);
+                const response = await fetch(`/api/gcs/buckets?projectId=${project.projectId}`);
                 if (response.ok) {
                     const data = await response.json();
-                    setManagedBuckets(data);
+                    setProjectBuckets(data);
                     if (data.length > 0) {
                         setTargetBucket(data[0].name);
                     } else {
-                        setCreateBucket(true);
+                        setShowCreateBucketForm(true);
                     }
                 }
             } catch (e) {
@@ -159,8 +162,36 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                 setIsLoadingBuckets(false);
             }
         };
-        fetchManagedBuckets();
+        fetchProjectBuckets();
     }, [project.projectId]);
+
+    const handleCreateBucket = async () => {
+        setIsCreatingBucket(true);
+        setCreateBucketError(null);
+        try {
+            const response = await fetch('/api/models/buckets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    bucketName: newBucketName,
+                    location: newBucketRegion,
+                    projectId: project.projectId,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to create bucket.');
+            }
+            const newBucket = { name: data.name, location: data.location };
+            setProjectBuckets(prev => [...prev, newBucket]);
+            setTargetBucket(newBucket.name);
+            setShowCreateBucketForm(false);
+        } catch (err: any) {
+            setCreateBucketError(err.message);
+        } finally {
+            setIsCreatingBucket(false);
+        }
+    };
 
     const handlePreflight = async () => {
         setIsPreflighting(true);
@@ -191,37 +222,13 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
         setDownloadProgress({ message: 'Starting download...' });
         setStep(4);
 
-        let finalBucketName = targetBucket;
-        if (createBucket) {
-            try {
-                const createResponse = await fetch('/api/models/buckets', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        bucketName: newBucketName,
-                        location: newBucketRegion,
-                        projectId: project.projectId,
-                    }),
-                });
-                const data = await createResponse.json();
-                if (!createResponse.ok) {
-                    throw new Error(data.error || 'Failed to create bucket.');
-                }
-                finalBucketName = data.name;
-            } catch (err: any) {
-                setDownloadError(err.message);
-                setIsDownloading(false);
-                return;
-            }
-        }
-
         try {
             const response = await fetch('/api/models/import/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     modelId,
-                    bucketName: finalBucketName,
+                    bucketName: targetBucket,
                     hfToken,
                     projectId: project.projectId,
                     totalSize: preflightInfo?.totalSize,
@@ -230,6 +237,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
 
             if (!response.body) throw new Error('Download failed: No response body.');
 
+            let buffer = '';
             const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
             while (true) {
                 const { value, done } = await reader.read();
@@ -238,19 +246,26 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                     setTimeout(onImportSuccess, 2000);
                     break;
                 }
-                const lines = value.split('\n\n').filter(line => line.startsWith('data: '));
-                for (const line of lines) {
-                    try {
-                        const json = JSON.parse(line.substring(6));
-                        if (json.error) {
-                            setDownloadError(json.error);
-                            setIsDownloading(false);
-                            return;
+                
+                buffer += value;
+                let boundary = buffer.indexOf('\n\n');
+                while (boundary !== -1) {
+                    const message = buffer.substring(0, boundary);
+                    buffer = buffer.substring(boundary + 2);
+                    if (message.startsWith('data: ')) {
+                        try {
+                            const json = JSON.parse(message.substring(6));
+                            if (json.error) {
+                                setDownloadError(json.error);
+                                setIsDownloading(false);
+                                return;
+                            }
+                            setDownloadProgress(json);
+                        } catch (e) {
+                            console.error("Failed to parse SSE chunk", message);
                         }
-                        setDownloadProgress(json);
-                    } catch (e) {
-                        console.error("Failed to parse SSE chunk", value);
                     }
+                    boundary = buffer.indexOf('\n\n');
                 }
             }
         } catch (err: any) {
@@ -268,16 +283,28 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
             </div>
 
             <div className="space-y-6">
-                {/* Step 1: Target Bucket */}
-                <div className={`bg-white border border-gray-200 rounded-md ${step !== 1 ? 'opacity-50' : ''}`}>
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">Step 1: Target Bucket</h2></div>
+                {/* Step 1 & 2: Target Bucket and Model Source */}
+                <div className="bg-white border border-gray-200 rounded-md">
+                    <div className="p-4 border-b"><h2 className="text-base font-medium">Model Details</h2></div>
                     <div className="p-4 space-y-4">
-                        <div className="flex items-center space-x-4">
-                            <label><input type="radio" checked={!createBucket} onChange={() => setCreateBucket(false)} disabled={managedBuckets.length === 0} /> Use Existing Bucket</label>
-                            <label><input type="radio" checked={createBucket} onChange={() => setCreateBucket(true)} /> Create New Bucket</label>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Target Bucket</label>
+                            <div className="flex items-center space-x-2 mt-1">
+                                {isLoadingBuckets ? <p>Loading buckets...</p> :
+                                    <select value={targetBucket} onChange={e => setTargetBucket(e.target.value)} className="flex-grow p-2 border border-gray-300 rounded-md">
+                                        {projectBuckets.length === 0 && <option disabled>No buckets found</option>}
+                                        {projectBuckets.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
+                                    </select>
+                                }
+                                <button onClick={() => setShowCreateBucketForm(prev => !prev)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+                                    {showCreateBucketForm ? 'Cancel' : 'Create New Bucket'}
+                                </button>
+                            </div>
                         </div>
-                        {createBucket ? (
-                            <div className="space-y-2">
+
+                        {showCreateBucketForm && (
+                            <div className="p-4 border-t border-gray-200 space-y-3">
+                                <h3 className="font-medium text-gray-800">Create a New Bucket</h3>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700">Bucket Name</label>
                                     <input type="text" value={newBucketName} onChange={e => setNewBucketName(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
@@ -288,48 +315,45 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                                         {SUPPORTED_REGIONS.map(r => <option key={r.name} value={r.name}>{r.description} ({r.name})</option>)}
                                     </select>
                                 </div>
-                            </div>
-                        ) : (
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">Select Bucket</label>
-                                {isLoadingBuckets ? <p>Loading buckets...</p> :
-                                    <select value={targetBucket} onChange={e => setTargetBucket(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
-                                        {managedBuckets.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
-                                    </select>
-                                }
+                                {createBucketError && <p className="text-red-500 text-sm">{createBucketError}</p>}
+                                <button onClick={handleCreateBucket} disabled={isCreatingBucket || !newBucketName} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">
+                                    {isCreatingBucket && <Spinner />}
+                                    Create Bucket
+                                </button>
                             </div>
                         )}
+                        
+                        <div className="border-t border-gray-200 pt-4 space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Model Source</label>
+                                <select value={modelSource} onChange={e => setModelSource(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
+                                    <option value="huggingface">Hugging Face (vLLM)</option>
+                                    <option value="ollama" disabled>Ollama (coming soon)</option>
+                                </select>
+                            </div>
+                                <div>
+                                <label className="block text-sm font-medium text-gray-700">Model ID</label>
+                                <input type="text" value={modelId} onChange={e => setModelId(e.target.value)} placeholder="e.g., google/gemma-2-9b-it" className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                <div className="text-xs text-gray-500 mt-1">
+                                    Suggestions:
+                                    <button type="button" onClick={() => setModelId('google/gemma-3-1b-it')} className="ml-2 text-blue-600 hover:underline">google/gemma-3-1b-it</button>
+                                    <button type="button" onClick={() => setModelId('google/gemma-3-4b-it')} className="ml-2 text-blue-600 hover:underline">google/gemma-3-4b-it</button>
+                                    <button type="button" onClick={() => setModelId('google/gemma-3-12b-it')} className="ml-2 text-blue-600 hover:underline">google/gemma-3-12b-it</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Hugging Face Token (optional)</label>
+                                <input type="text" value={hfToken} onChange={e => setHfToken(e.target.value)} placeholder="hf_..." className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                <p className="text-xs text-gray-500 mt-1">Required for gated models like Llama 3.</p>
+                            </div>
+                            {preflightError && <p className="text-red-500 mt-2">{preflightError}</p>}
+                        </div>
                     </div>
                 </div>
 
-                {/* Step 2: Model Source */}
-                <div className={`bg-white border border-gray-200 rounded-md ${step !== 2 ? 'opacity-50' : ''}`}>
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">Step 2: Model Source</h2></div>
-                    <div className="p-4 space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Model Source</label>
-                            <select value={modelSource} onChange={e => setModelSource(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
-                                <option value="huggingface">Hugging Face (vLLM)</option>
-                                <option value="ollama" disabled>Ollama (coming soon)</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Model ID</label>
-                            <input type="text" value={modelId} onChange={e => setModelId(e.target.value)} placeholder="e.g., google/gemma-2-9b-it" className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Hugging Face Token (optional)</label>
-                            <input type="password" value={hfToken} onChange={e => setHfToken(e.target.value)} placeholder="hf_..." className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                            <p className="text-xs text-gray-500 mt-1">Required for gated models like Llama 3.</p>
-                        </div>
-                        {preflightError && <p className="text-red-500 mt-2">{preflightError}</p>}
-                    </div>
-                </div>
-
-                {/* Step 3: Pre-flight Check */}
                 {step >= 3 && preflightInfo && (
-                    <div className={`bg-white border border-gray-200 rounded-md ${step !== 3 ? 'opacity-50' : ''}`}>
-                        <div className="p-4 border-b"><h2 className="text-base font-medium">Step 3: Confirmation</h2></div>
+                    <div className="bg-white border border-gray-200 rounded-md">
+                        <div className="p-4 border-b"><h2 className="text-base font-medium">Confirmation</h2></div>
                         <div className="p-4">
                             <p className="font-medium">Model: <span className="font-normal">{modelId}</span></p>
                             <p className="font-medium">Total Size: <span className="font-normal">{formatBytes(preflightInfo.totalSize)}</span></p>
@@ -338,7 +362,6 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                     </div>
                 )}
 
-                {/* Step 4: Download Progress */}
                 {step === 4 && (
                     <div className="bg-white border border-gray-200 rounded-md">
                         <div className="p-4 border-b"><h2 className="text-base font-medium">Download Progress</h2></div>
@@ -358,10 +381,8 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                     </div>
                 )}
 
-                {/* Action Buttons */}
                 <div className="flex justify-end pt-4">
-                    {step === 1 && <button onClick={() => setStep(2)} disabled={createBucket ? !newBucketName : !targetBucket} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400">Next</button>}
-                    {step === 2 && <button onClick={handlePreflight} disabled={!modelId || isPreflighting} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">{isPreflighting && <Spinner />} Check & Continue</button>}
+                    {step < 3 && <button onClick={handlePreflight} disabled={!targetBucket || !modelId || isPreflighting} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">{isPreflighting && <Spinner />} Check & Continue</button>}
                     {step === 3 && <button onClick={handleStartDownload} disabled={isDownloading} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">{isDownloading && <Spinner />} Start Download</button>}
                 </div>
             </div>
