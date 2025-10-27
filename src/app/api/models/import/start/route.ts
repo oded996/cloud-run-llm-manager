@@ -1,4 +1,8 @@
 import { Storage } from '@google-cloud/storage';
+import * as https from 'https';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 const METADATA_FILE_NAME = 'llm-manager-metadata.json';
 
@@ -85,58 +89,62 @@ async function syncModelToGCS(
         }
       }
 
-      log(`File ${relativePath} not found in GCS. Downloading...`);
-      const downloadUrl = `https://huggingface.co/${modelId}/resolve/main/${relativePath}`;
-      const downloadResponse = await fetch(downloadUrl, { headers });
+      const tempFilePath = path.join(os.tmpdir(), `llm-manager-${Date.now()}-${relativePath.replace(/\//g, '_')}`);
+      
+      try {
+        const pipeToTemp = (responseStream: import('http').IncomingMessage, resolve: () => void, reject: (reason?: any) => void) => {
+          const fileSize = file.size || 0;
+          let downloadedSize = 0;
+          const fileWriteStream = fs.createWriteStream(tempFilePath);
 
-      if (!downloadResponse.ok || !downloadResponse.body) {
-        log(`Failed to download ${relativePath}: ${downloadResponse.statusText}`);
-        continue;
-      }
-
-      // 3. Stream the file from the download URL to GCS, reporting progress along the way.
-      await new Promise<void>((resolve, reject) => {
-        const fileSize = file.size || 0;
-        let downloadedSize = 0;
-
-        const gcsWriteStream = gcsFile.createWriteStream({
-          highWaterMark: 16 * 1024 * 1024, // 16 MB buffer for better performance
-        });
-        const reader = downloadResponse.body!.getReader();
-
-        gcsWriteStream.on('finish', () => {
-            sendProgress(relativePath, fileSize, fileSize); // Final progress update
-            log(`Successfully uploaded ${relativePath} to GCS.`);
-            resolve();
-        });
-        gcsWriteStream.on('error', (err) => {
-            log(`Error uploading ${relativePath}: ${err.message}`);
-            reject(err);
-        });
-
-        const pump = () => {
-          reader.read().then(({ done, value }) => {
-            if (done) {
-              gcsWriteStream.end();
-              return;
-            }
-
-            downloadedSize += value.length;
+          responseStream.on('data', (chunk) => {
+            downloadedSize += chunk.length;
             sendProgress(relativePath, downloadedSize, fileSize);
+          });
 
-            // Write the data and check for backpressure.
-            if (!gcsWriteStream.write(value)) {
-              // The buffer is full, so we wait for it to drain before reading more.
-              gcsWriteStream.once('drain', pump);
-            } else {
-              // The buffer has space, so we can ask for the next chunk immediately.
-              pump();
+          responseStream.pipe(fileWriteStream)
+            .on('finish', resolve)
+            .on('error', reject);
+        };
+
+        // STAGE 1: Download from Hugging Face to a temporary local file
+        log(`Downloading ${relativePath} to temporary file...`);
+        const downloadUrl = new URL(`https://huggingface.co/${modelId}/resolve/main/${relativePath}`);
+        const options = { headers: { ...headers, 'Accept': 'application/octet-stream' } };
+
+        await new Promise<void>((resolve, reject) => {
+          const fileWriteStream = fs.createWriteStream(tempFilePath);
+          https.get(downloadUrl, options, (response) => {
+            if (response.statusCode === 302 || response.statusCode === 301) {
+              const redirectUrl = response.headers.location;
+              if (redirectUrl) {
+                https.get(redirectUrl, options, (redirectedResponse) => {
+                  pipeToTemp(redirectedResponse, resolve, reject);
+                }).on('error', reject);
+                return;
+              }
             }
-          }).catch(reject);
-        }
+            pipeToTemp(response, resolve, reject);
+          }).on('error', reject);
+        });
 
-        pump();
-      });
+        // STAGE 2: Upload from the temporary file to GCS
+        log(`Download of ${relativePath} complete. Uploading to GCS...`);
+        sendProgress(relativePath, file.size, file.size); // Mark download as complete
+        
+        await bucket.upload(tempFilePath, {
+          destination: gcsPath,
+          // Optional: Add resumable upload configuration for very large files if needed
+        });
+
+        log(`Successfully uploaded ${relativePath} to GCS.`);
+
+      } finally {
+        // STAGE 3: Cleanup the temporary file
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+      }
     }
 
     // 4. After all files are downloaded, update the metadata file.
