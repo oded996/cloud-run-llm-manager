@@ -1,0 +1,5 @@
+{
+  "name": "Cloud Run",
+  "description": "A replica of the Google Cloud Run services page, built with Angular and Tailwind CSS. This application displays a filterable and sortable list of Cloud Run services in a familiar interface.",
+  "requestFramePermissions": []
+}

@@ -1,36 +1,83 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Cloud Run LLM Manager
 
-## Getting Started
+## 1. Objective
 
-First, run the development server:
+Deploying and managing open-source Large Language Models (LLMs) on Google Cloud Run with GPUs can be a complex, multi-step process. It often requires manual configuration of GCS for model storage, IAM for permissions, and the Cloud Run service itself—from selecting the right serving framework (like vLLM) to configuring GCS mounts and GPU settings.
 
+This project is a self-contained Next.js application that provides a simple UI and a backend API to abstract and streamline this entire lifecycle. It acts as a "control plane" or "manager" to help you easily download, deploy, and monitor your LLM services on Cloud Run.
+
+## 2. Getting Started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) (v18 or later)
+- [Google Cloud SDK](https://cloud.google.com/sdk/docs/install)
+
+### Running Locally
+
+1.  **Install Dependencies:**
+    ```bash
+    npm install
+    ```
+
+2.  **Authenticate with Google Cloud:**
+    To run the application locally, you need to provide Application Default Credentials (ADC) so the backend can make authenticated calls to Google Cloud APIs.
+    ```bash
+    gcloud auth application-default login
+    ```
+
+3.  **Run the Development Server:**
+    ```bash
+    npm run dev
+    ```
+
+4.  **Open the Application:**
+    Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+### Deploying to Cloud Run
+
+You can deploy the application directly from your source code to Cloud Run using `gcloud`.
+
+**1. Important: Service Account Permissions**
+
+For the manager to function correctly when deployed, it needs a service account with the appropriate permissions to manage other services and resources on your behalf.
+
+**Create a Service Account:**
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+gcloud iam service-accounts create llm-manager-sa \
+  --project=[PROJECT_ID] \
+  --display-name="LLM Manager Service Account"
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+**Grant Required Roles:**
+```bash
+# Grant permissions to manage Cloud Run services
+gcloud projects add-iam-policy-binding [PROJECT_ID] \
+  --member="serviceAccount:llm-manager-sa@[PROJECT_ID].iam.gserviceaccount.com" \
+  --role="roles/run.admin"
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+# Grant permissions to manage GCS buckets and objects
+gcloud projects add-iam-policy-binding [PROJECT_ID] \
+  --member="serviceAccount:llm-manager-sa@[PROJECT_ID].iam.gserviceaccount.com" \
+  --role="roles/storage.admin"
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# Grant permissions to manage IAM policies for other services
+gcloud projects add-iam-policy-binding [PROJECT_ID] \
+  --member="serviceAccount:llm-manager-sa@[PROJECT_ID].iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountAdmin"
+```
 
-## Learn More
+**2. Deploy the Service:**
 
-To learn more about Next.js, take a look at the following resources:
+Use the following command to build and deploy the application. Remember to replace `[PROJECT_ID]` and `[REGION]` with your own values.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+gcloud run deploy llm-manager \
+  --project=[PROJECT_ID] \
+  --region=[REGION] \
+  --service-account=llm-manager-sa@[PROJECT_ID].iam.gserviceaccount.com \
+  --source . \
+  --allow-unauthenticated
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+**Note on `--allow-unauthenticated`**: This flag makes your manager UI publicly accessible. For production environments, it is highly recommended to remove this flag and secure your application using [Identity-Aware Proxy (IAP)](https://cloud.google.com/iap).

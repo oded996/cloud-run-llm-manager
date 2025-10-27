@@ -1,0 +1,158 @@
+# Development Changelog
+
+## About This File
+
+This document serves as a running changelog to track the progress of the Cloud Run LLM Manager project. Its purpose is to provide a clear and chronological record of implemented features, bug fixes, and significant architectural changes for any developer joining or continuing the project.
+
+### How to Maintain This File
+
+- **Add a New Entry for Each Session:** At the start of a new development session, add a new date heading in `YYYY-MM-DD` format.
+- **Use Subheadings:** Group related changes under subheadings like `Implemented Features`, `Bug Fixes & UX Improvements`, `Backend & Dependencies`, and `Documentation`.
+- **Be Specific but Concise:** Briefly describe each change. For bugs, include a short summary of the issue and the solution.
+- **Update Chronologically:** Always add the newest entries at the top of the file.
+
+## 2025-10-27
+
+### Implemented Features
+
+- **"Services" Tab - Live Data:**
+    - Replaced the mock component with a functional UI that lists Cloud Run services.
+    - Created the `/api/services/list` endpoint to fetch all services with the `managed-by: llm-manager` label across all supported regions.
+    - Implemented a detail view that shows key information about a selected service, including a deep link to the Google Cloud Console.
+
+- **Centralized Configuration:**
+    - Created a new configuration file at `src/app/config/regions.ts` to act as a single source of truth for GPU-supported regions and the specific GPUs available in each.
+    - Refactored the `/api/services/list` endpoint and the "Models" component (both `ImportModelView` and `DeployServiceView`) to use this centralized configuration.
+
+### Bug Fixes & UX Improvements
+
+- **Deployment API Error:**
+    - **Issue:** The deployment polling logic was crashing with a `TypeError: is not iterable` because it was incorrectly destructuring the response from the `operations.get()` call.
+    - **Solution:** Corrected the code to handle the single object response, resolving the runtime error.
+- **Duplicate Service Name:**
+    - **Issue:** The application allowed users to attempt to deploy a service with a name that already existed in the target region, causing a deployment failure.
+    - **Solution:** Implemented a new `/api/services/exists` endpoint and added a debounced validation check in the UI to prevent duplicate service names and disable the deploy button if a conflict is detected.
+- **Build & Runtime Errors:**
+    - **Issue:** A series of build failures and runtime errors occurred due to faulty refactoring, including missing React imports, duplicate component definitions, incorrect import paths, and multiple default exports.
+    - **Solution:** Systematically identified and fixed each issue by restoring missing code, removing duplicates, correcting paths, and ensuring all components are correctly defined and exported.
+- **TypeScript Type Errors:**
+    - **Issue:** The build was failing due to type incompatibilities between `google-auth-library` and `googleapis`.
+    - **Solution:** Applied type casting (`as any`) in the affected API routes as a workaround to resolve the type conflicts.
+- **Service Status Display:**
+    - **Issue:** All services in the "Services" tab were incorrectly displayed with an "Error" status.
+    - **Solution:** Updated the status detection logic to correctly interpret the Cloud Run API response, checking the `terminalCondition`, `reconciling` status, and comparing `latestReadyRevision` with `latestCreatedRevision` to accurately show "Running", "Deploying", or "Error" states.
+
+## 2025-10-26
+
+### Implemented Features
+
+- **"Models" Tab - Core Functionality:**
+    - Replaced the placeholder component with a full-featured UI for managing models.
+    - The UI now discovers and lists GCS buckets that are managed by this tool by looking for a `llm-manager-metadata.json` file.
+    - For each managed bucket, the view displays the models stored within, their size, estimated vRAM requirements, and recommended GPUs.
+    - Implemented the "Import Model" workflow as a dedicated, single-page view with a card-based layout.
+
+- **"Models" Tab - Import Workflow:**
+    - **Bucket Selection:** The import view now features a dynamic bucket selection card. It lists all buckets in the project (not just managed ones) and allows for the creation of new buckets in GPU-supported regions.
+    - **Model Source:** Users can now select between "Hugging Face (vLLM)" and "Ollama".
+        - For Hugging Face, a list of suggested Google Gemma models is provided, while still allowing custom model IDs.
+        - The Ollama option is present but disabled, showing a "Not yet implemented" message.
+    - **Pre-flight Check:** Before downloading, a backend API (`/api/models/import/preflight`) validates the model ID, checks for gated models, and fetches file sizes. It now intelligently detects when a Hugging Face token is required and prompts the user.
+    - **Streaming Download:** The backend (`/api/models/import/start`) streams model files directly from Hugging Face to GCS without saving them to the local disk, using Server-Sent Events (SSE) to provide real-time progress updates to the frontend.
+    - **Metadata Update:** Upon successful download, the model's information, including its total size, is saved to the `llm-manager-metadata.json` file in the target bucket.
+
+- **"Services" Tab - vLLM Deployment:**
+    - **Deployment View:** Added a "Deploy" button to completed models, which navigates to a new view for configuring a vLLM service.
+    - **Configuration UI:** The view includes cards for setting:
+        - Service Name, Region (locked to the model's bucket region).
+        - Container Image & Port (with vLLM defaults).
+        - Billing (read-only, set to "Instance-based").
+        - Service Scaling (Min/Max instances).
+        - Resources (GPU, vCPU, Memory), with options constrained to L4 GPU limits.
+        - GPU Zonal Redundancy (defaults to disabled for cost savings).
+        - Volume Mounts (read-only, showing the GCS bucket path).
+        - Container Arguments & Environment Variables (pre-filled with vLLM defaults).
+    - **Deployment Backend:**
+        - Created the `/api/services/deploy` endpoint to receive the service configuration.
+        - The backend constructs the correct JSON payload for the Cloud Run Admin API v2, including the GCS FUSE volume mount, resource limits, and scaling settings.
+        - The service is labeled with `managed-by: llm-manager` for future discovery.
+        - The API streams back the status of the long-running deployment operation to the frontend.
+
+### Bug Fixes & UX Improvements
+
+- **Deployment API Payload:**
+    - **Issue:** The deployment API was failing due to an incorrect JSON structure for specifying GPU resources and other settings.
+    - **Solution:** After several iterations and debugging, the payload was corrected to match the specific requirements of the Cloud Run Admin API v2, separating resource counts, accelerator types, and annotations into their correct locations within the service template.
+- **Error Visibility:**
+    - **Issue:** Backend errors during the streaming deployment process were not being displayed in the UI.
+    - **Solution:** Refactored the frontend's `handleDeploy` function to correctly parse the SSE stream, detect error messages, and display them in the progress view.
+
+### Known Issues & To-Do
+
+- **GPU Support:** The deployment UI currently only supports the NVIDIA L4 GPU. The UI and backend need to be updated to support other available types like H100 and RTX 6000.
+- **Ollama Integration:** The workflow for importing and deploying Ollama models is not yet implemented.
+- **Services Dashboard:** The main "Services" tab view for listing and managing existing deployments still needs to be implemented.
+
+---
+
+## 2025-10-25
+
+### Implemented Features
+
+- **Initial Project Setup:**
+    - Created `design.md` to outline project goals, user journeys, and technical architecture.
+    - Scaffolded the basic Next.js application structure with placeholder components for the main tabs (General, Models, Services).
+
+- **"General" Tab - Application Identity:**
+    - Added a card to display the application's identity (user or service account).
+    - Implemented the `/api/project/identity` endpoint using `google-auth-library` to determine the identity via Application Default Credentials (ADC).
+
+- **"General" Tab - Project Selection:**
+    - Implemented a dynamic project selection card with two states: an "edit" mode and a "selected" mode.
+    - Created backend APIs to support project selection:
+        - `/api/project/list`: Fetches an initial list of projects.
+        - `/api/project/search`: Provides debounced, server-side search for projects.
+        - `/api/project/details`: Fetches details for a single project by ID.
+    - The selected project is now persisted in local storage and displayed in the main header.
+    - Added a manual input fallback for users who cannot list projects.
+
+- **"General" Tab - Configuration Status:**
+    - Implemented a card to display the status of required APIs and IAM permissions.
+    - Created backend APIs to check configurations against the selected project:
+        - `/api/project/service-usage`: Checks if Cloud Run and GCS APIs are enabled.
+        - `/api/project/permissions`: Verifies if the application's identity has the necessary `roles/run.admin` and `roles/storage.admin` permissions.
+    - The UI provides direct links to enable APIs and displays the required roles if permissions are missing.
+
+### Bug Fixes & UX Improvements
+
+- **Identity Resolution:**
+    - **Issue:** The identity API could not resolve the email for local user credentials (`gcloud auth application-default login`).
+    - **Solution:** The API was enhanced to use the user's access token to call the Google `userinfo` endpoint, correctly retrieving the email.
+
+- **Project Selection UX:**
+    - **Issue:** On page reload, the name of the selected project was not displayed correctly.
+    - **Solution:** Implemented the `/api/project/details` endpoint to fetch the project's full information on load.
+    - **Issue:** The "Confirm" button was disabled when selecting a project from a single-item search result.
+    - **Solution:** Added an `onClick` handler to the `<select>` element to ensure the selection is always registered.
+    - **Issue:** A race condition could cause the wrong project to be saved after a search.
+    - **Solution:** Refined state management to correctly handle draft vs. confirmed project selections.
+    - **Improvement:** Added "Confirm" and "Cancel" buttons for a more deliberate selection process.
+    - **Improvement:** Added a "Loading..." message while the initial project data is being fetched.
+
+- **UI Regressions:**
+    - **Issue:** A `ReferenceError` for a missing `identity` variable crashed the page.
+    - **Solution:** Re-initialized the missing state variable in the `General` component.
+    - **Issue:** The "Application Identity" and "Project Selection" cards disappeared after a faulty component update.
+    - **Solution:** Restored the full, correct JSX for the `General` component.
+
+### Backend & Dependencies
+
+- **Added Dependencies:**
+    - `google-auth-library`: For Google Cloud authentication.
+    - `googleapis`: To interact with Cloud Resource Manager and Service Usage APIs.
+- **State Management:**
+    - Lifted the `selectedProject` state from the `General` component to the parent `Home` component to share it with the `Header`.
+
+### Documentation
+
+- Created this `progress.md` file to serve as a running changelog for the project.
