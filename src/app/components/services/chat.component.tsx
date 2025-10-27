@@ -15,54 +15,81 @@ interface Message {
   content: string;
 }
 
-export const ChatCard = ({ serviceUrl }: ChatCardProps) => {
-  const [models, setModels] = useState<Model[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('');
+export const ChatCard = ({ serviceUrl, modelSource }: { serviceUrl: string, modelSource: 'ollama' | 'huggingface' }) => {
+  const [models, setModels] = useState<any[]>([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [isLoadingModels, setIsLoadingModels] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
+  const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const fetchModels = async () => {
+      setIsLoadingModels(true);
       try {
+        // Choose the path and method based on the model source
+        const isOllama = modelSource === 'ollama';
+        const path = isOllama ? '/api/tags' : '/v1/models';
+        const method = isOllama ? 'GET' : 'POST'; // Ollama uses GET, vLLM uses POST (or GET)
+
         const response = await fetch('/api/services/chat', {
-          method: 'POST',
+          method: 'POST', // Our proxy always uses POST
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ serviceUrl, endpoint: '/v1/models', method: 'GET' }),
+          body: JSON.stringify({
+            serviceUrl,
+            path,
+            method, // Pass the intended method to the proxy
+            payload: {},
+          }),
         });
-        if (!response.ok) throw new Error('Failed to fetch models.');
         const data = await response.json();
-        const modelsData = Array.isArray(data.data) ? data.data : [];
-        setModels(modelsData);
-        if (modelsData.length > 0) {
-          setSelectedModel(modelsData[0].id);
+
+        let loadedModels = [];
+        if (isOllama && data.models) {
+          // Adapt Ollama's response: { models: [{ name: 'llama3:latest', ... }] }
+          loadedModels = data.models.map((m: any) => ({ id: m.name }));
+        } else if (!isOllama && data.data) {
+          // Use vLLM's response: { data: [{ id: 'meta-llama/Meta-Llama-3-8B-Instruct', ... }] }
+          loadedModels = data.data;
         }
-      } catch (err: any) {
-        setError('Could not connect to the model service. Ensure it is running and accessible.');
+
+        setModels(loadedModels);
+        if (loadedModels.length > 0) {
+          setSelectedModel(loadedModels[0].id);
+        }
+
+      } catch (error) {
+        console.error('Failed to fetch models:', error);
+      } finally {
+        setIsLoadingModels(false);
       }
     };
+
     fetchModels();
-  }, [serviceUrl]);
+  }, [serviceUrl, modelSource]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!inputValue.trim()) return;
 
-    const newMessages: Message[] = [...messages, { role: 'user', content: input }];
+    const newMessages: Message[] = [...messages, { role: 'user', content: inputValue }];
     setMessages(newMessages);
-    setInput('');
+    setInputValue('');
     setIsLoading(true);
     setError(null);
 
     try {
+      const isOllama = modelSource === 'ollama';
+      const path = isOllama ? '/api/chat' : '/v1/chat/completions';
+
       const response = await fetch('/api/services/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           serviceUrl,
-          endpoint: '/v1/chat/completions',
+          path: path,
           method: 'POST',
           payload: {
             model: selectedModel,
@@ -75,27 +102,60 @@ export const ChatCard = ({ serviceUrl }: ChatCardProps) => {
       if (!response.body) throw new Error('No response body.');
 
       const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-      let assistantResponse = '';
       setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+      let buffer = '';
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
 
-        const lines = value.split('\n').filter(line => line.startsWith('data: '));
+        buffer += value;
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep the last, possibly incomplete, line
+
         for (const line of lines) {
-          const chunk = line.substring(6);
+          if (!line.trim()) continue;
+
+          const isOllamaStream = modelSource === 'ollama';
+          let chunk = line;
+
+          // For vLLM/OpenAI, remove the 'data: ' prefix
+          if (!isOllamaStream) {
+            if (line.startsWith('data: ')) {
+              chunk = line.substring(6);
+            } else {
+              continue;
+            }
+          }
+          
           if (chunk.trim() === '[DONE]') {
             break;
           }
-          const json = JSON.parse(chunk);
-          if (json.choices && json.choices[0].delta.content) {
-            assistantResponse += json.choices[0].delta.content;
-            setMessages(prev => {
-              const lastMessage = prev[prev.length - 1];
-              lastMessage.content = assistantResponse;
-              return [...prev.slice(0, -1), lastMessage];
-            });
+
+          try {
+            const json = JSON.parse(chunk);
+            let content = '';
+
+            if (isOllama) {
+              if (json.message && json.message.content) {
+                content = json.message.content;
+              }
+            }
+            else {
+              if (json.choices && json.choices[0].delta.content) {
+                content = json.choices[0].delta.content;
+              }
+            }
+
+            if (content) {
+              setMessages(prev => {
+                const lastMessage = prev[prev.length - 1];
+                const updatedLastMessage = { ...lastMessage, content: lastMessage.content + content };
+                return [...prev.slice(0, -1), updatedLastMessage];
+              });
+            }
+          } catch (e) {
+            console.error('Failed to parse stream chunk:', chunk, e);
           }
         }
       }
@@ -140,8 +200,8 @@ export const ChatCard = ({ serviceUrl }: ChatCardProps) => {
           <div className="flex space-x-2">
             <input
               type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
               placeholder="Type your message..."
               className="flex-grow p-2 border border-gray-300 rounded-md"
               disabled={isLoading}

@@ -20,6 +20,7 @@ interface Bucket {
 interface PreflightInfo {
     files: { name: string; size: number }[];
     totalSize: number;
+    manifest?: any;
 }
 
 interface DownloadProgress {
@@ -197,83 +198,106 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
         }
     };
 
-    const handlePreflight = async () => {
-        setIsPreflighting(true);
-        setPreflightError(null);
-        setPreflightInfo(null);
-        try {
-            const response = await fetch('/api/models/import/preflight', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ modelId, hfToken }),
-            });
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data.error || 'Preflight check failed.');
-            }
-            setPreflightInfo(data);
-            setStep(3);
-        } catch (err: unknown) {
-            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-            setPreflightError(errorMessage);
-        } finally {
-            setIsPreflighting(false);
-        }
-    };
-
-    const handleStartDownload = async () => {
-        setIsDownloading(true);
-        setDownloadError(null);
-        setDownloadProgress({ 
-            message: 'Starting download...',
-            files: preflightInfo!.files.map(f => ({ name: f.name, total: f.size, downloaded: 0 })),
-            totalProgress: 0,
-        });
-        setStep(4);
-
-        const verifyDownload = async (retryCount = 0): Promise<void> => {
-            setDownloadProgress(prev => ({ ...prev, message: `Verifying download (attempt ${retryCount + 1})...` }));
-            try {
-                const verifyResponse = await fetch(`/api/models/import/verify?projectId=${project.projectId}&bucketName=${targetBucket}&modelId=${modelId}`);
-                const verifyData = await verifyResponse.json();
-
-                if (verifyResponse.ok && verifyData.verified) {
-                    setDownloadProgress(prev => ({ ...prev, message: 'Verification successful! Import complete.' }));
-                    setTimeout(onImportSuccess, 2000);
-                    setIsDownloading(false);
-                } else {
-                    throw new Error(verifyData.error || 'Verification failed.');
+            const handlePreflight = async () => {
+                setIsPreflighting(true);
+                setPreflightError(null);
+                setPreflightInfo(null);
+                
+                const url = modelSource === 'huggingface' 
+                    ? '/api/models/import/preflight' 
+                    : '/api/models/import/ollama/preflight';
+                
+                const body = modelSource === 'huggingface'
+                    ? { modelId, hfToken }
+                    : { modelId };
+    
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Preflight check failed.');
+                    }
+                    setPreflightInfo(data);
+                    setStep(3);
+                } catch (err: unknown) {
+                    const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+                    setPreflightError(errorMessage);
+                } finally {
+                    setIsPreflighting(false);
                 }
-            } catch (err: unknown) {
-                const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-                console.error(`Verification attempt ${retryCount + 1} failed:`, err);
-                if (retryCount < 2) { // 3 retries total (0, 1, 2)
-                    setTimeout(() => verifyDownload(retryCount + 1), 3000); // Wait 3 seconds before retrying
-                } else {
-                    setDownloadError(`Download completed, but verification failed after 3 attempts. Please check the bucket and try importing again. Error: ${errorMessage}`);
-                    setIsDownloading(false);
-                }
-            }
-        };
-
-        try {
-            const response = await fetch('/api/models/import/start', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    modelId,
-                    bucketName: targetBucket,
-                    hfToken,
-                    projectId: project.projectId,
-                    totalSize: preflightInfo?.totalSize,
-                    files: preflightInfo?.files, // <-- Add this line
-                }),
-            });
-
-            if (!response.body) throw new Error('Download failed: No response body.');
-
-            let buffer = '';
-            const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+            };
+    
+            const handleStartDownload = async () => {
+                setIsDownloading(true);
+                setDownloadError(null);
+                setDownloadProgress({
+                    message: 'Starting download...', 
+                    files: preflightInfo!.files.map(f => ({ name: f.name, total: f.size, downloaded: 0 })),
+                    totalProgress: 0,
+                });
+                setStep(4);
+    
+                const url = modelSource === 'huggingface'
+                    ? '/api/models/import/start'
+                    : '/api/models/import/ollama/start';
+    
+                const body = modelSource === 'huggingface'
+                    ? {
+                        modelId,
+                        bucketName: targetBucket,
+                        hfToken,
+                        projectId: project.projectId,
+                        totalSize: preflightInfo?.totalSize,
+                        files: preflightInfo?.files,
+                      }
+                    : {
+                        modelId,
+                        bucketName: targetBucket,
+                        projectId: project.projectId,
+                        totalSize: preflightInfo?.totalSize,
+                        files: preflightInfo?.files,
+                        manifest: preflightInfo?.manifest, // Pass manifest for Ollama
+                      };
+                
+                const verifyDownload = async (retryCount = 0): Promise<void> => {
+                    setDownloadProgress(prev => ({ ...prev, message: `Verifying download (attempt ${retryCount + 1})...` }));
+                    try {
+                        const verifyResponse = await fetch(`/api/models/import/verify?projectId=${project.projectId}&bucketName=${targetBucket}&modelId=${modelId}`);
+                        const verifyData = await verifyResponse.json();
+    
+                        if (verifyResponse.ok && verifyData.verified) {
+                            setDownloadProgress(prev => ({ ...prev, message: 'Verification successful! Import complete.' }));
+                            setTimeout(onImportSuccess, 2000);
+                            setIsDownloading(false);
+                        } else {
+                            throw new Error(verifyData.error || 'Verification failed.');
+                        }
+                    } catch (err: unknown) {
+                        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+                        console.error(`Verification attempt ${retryCount + 1} failed:`, err);
+                        if (retryCount < 2) { // 3 retries total (0, 1, 2)
+                            setTimeout(() => verifyDownload(retryCount + 1), 3000); // Wait 3 seconds before retrying
+                        } else {
+                            setDownloadError(`Download completed, but verification failed after 3 attempts. Please check the bucket and try importing again. Error: ${errorMessage}`);
+                            setIsDownloading(false);
+                        }
+                    }
+                };
+    
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+    
+                    if (!response.body) throw new Error('Download failed: No response body.');
+    
+                    let buffer = '';            const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) {
@@ -382,27 +406,60 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                         
                         <div className="border-t border-gray-200 pt-4 space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-gray-700">Model Source</label>
-                                <select value={modelSource} onChange={e => setModelSource(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
-                                    <option value="huggingface">Hugging Face (vLLM)</option>
-                                    <option value="ollama" disabled>Ollama (coming soon)</option>
-                                </select>
-                            </div>
-                                <div>
-                                <label className="block text-sm font-medium text-gray-700">Model ID</label>
-                                <input type="text" value={modelId} onChange={e => setModelId(e.target.value)} placeholder="e.g., google/gemma-2-9b-it" className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                                <div className="text-xs text-gray-500 mt-1">
-                                    Suggestions:
-                                    <button type="button" onClick={() => setModelId('google/gemma-3-1b-it')} className="ml-2 text-blue-600 hover:underline">google/gemma-3-1b-it</button>
-                                    <button type="button" onClick={() => setModelId('google/gemma-3-4b-it')} className="ml-2 text-blue-600 hover:underline">google/gemma-3-4b-it</button>
-                                    <button type="button" onClick={() => setModelId('google/gemma-3-12b-it')} className="ml-2 text-blue-600 hover:underline">google/gemma-3-12b-it</button>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">Model Source</label>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <button
+                                        type="button"
+                                        onClick={() => { setModelSource('huggingface'); setModelId(''); }}
+                                        className={`p-4 border rounded-md text-left transition-colors ${modelSource === 'huggingface' ? 'border-blue-600 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+                                    >
+                                        <h3 className="font-medium text-gray-800">Hugging Face (vLLM)</h3>
+                                        <p className="text-xs text-gray-600 mt-1">Slower cold starts, but better performance for high-traffic use cases.</p>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => { setModelSource('ollama'); setModelId(''); }}
+                                        className={`p-4 border rounded-md text-left transition-colors ${modelSource === 'ollama' ? 'border-blue-600 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+                                    >
+                                        <h3 className="font-medium text-gray-800">Ollama</h3>
+                                        <p className="text-xs text-gray-600 mt-1">Fast cold start and fast single-user performance.</p>
+                                    </button>
                                 </div>
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">Hugging Face Token (optional)</label>
-                                <input type="text" value={hfToken} onChange={e => setHfToken(e.target.value)} placeholder="hf_..." className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                                <p className="text-xs text-gray-500 mt-1">Required for gated models like Llama 3.</p>
-                            </div>
+
+                            {modelSource === 'huggingface' && (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700">Model ID</label>
+                                        <input type="text" value={modelId} onChange={e => setModelId(e.target.value)} placeholder="e.g., google/gemma-3-4b-it" className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                        <div className="text-xs text-gray-500 mt-1">
+                                            Suggestions:
+                                            <button type="button" onClick={() => setModelId('google/gemma-3-1b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-1b-it</button>
+                                            <button type="button" onClick={() => setModelId('google/gemma-3-4b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-4b-it</button>
+                                            <button type="button" onClick={() => setModelId('google/gemma-3-12b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-12b-it</button>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700">Hugging Face Token (optional)</label>
+                                        <input type="text" value={hfToken} onChange={e => setHfToken(e.target.value)} placeholder="hf_..." className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                        <p className="text-xs text-gray-500 mt-1">Required for gated models like Llama 3.</p>
+                                    </div>
+                                </>
+                            )}
+
+                            {modelSource === 'ollama' && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Model ID</label>
+                                    <input type="text" value={modelId} onChange={e => setModelId(e.target.value)} placeholder="e.g., gemma3:4b" className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        Suggestions:
+                                        <button type="button" onClick={() => setModelId('gemma3:1b')} className="ml-2 text-blue-600 hover:underline">gemma3:1b</button>
+                                        <button type="button" onClick={() => setModelId('gemma3:4b')} className="ml-2 text-blue-600 hover:underline">gemma3:4b</button>
+                                        <button type="button" onClick={() => setModelId('gemma3:12b')} className="ml-2 text-blue-600 hover:underline">gemma3:12b</button>
+                                    </div>
+                                </div>
+                            )}
+
                             {preflightError && <p className="text-red-500 mt-2">{preflightError}</p>}
                         </div>
                     </div>
@@ -458,11 +515,11 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
 };
 
 const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart }: { project: Project, model: Model, bucket: Bucket, onClose: () => void, onDeploymentStart: (serviceName: string, region: string) => void }) => {
-    const [serviceName, setServiceName] = useState(`vllm-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
+    const [serviceName, setServiceName] = useState('');
     const [serviceNameError, setServiceNameError] = useState<string | null>(null);
     const [isCheckingName, setIsCheckingName] = useState(false);
-    const [containerImage, setContainerImage] = useState('vllm/vllm-openai');
-    const [containerPort, setContainerPort] = useState('8000');
+    const [containerImage, setContainerImage] = useState('');
+    const [containerPort, setContainerPort] = useState('');
     
     const [cpu, setCpu] = useState('8');
     const [memory, setMemory] = useState('16Gi');
@@ -472,16 +529,8 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
 
     const [gpuZonalRedundancyDisabled, setGpuZonalRedundancyDisabled] = useState(true);
     
-    const [args, setArgs] = useState([
-        { id: 1, key: '--model', value: `/gcs/${bucket.name}/${model.id}` },
-        { id: 2, key: '--tensor-parallel-size', value: '1' },
-        { id: 3, key: '--port', value: '8000' },
-        { id: 4, key: '--gpu-memory-utilization', value: '0.80' },
-        { id: 5, key: '--max-num-seqs', value: '128' },
-    ]);
-    const [envVars, setEnvVars] = useState([
-        { id: 1, key: 'HF_HUB_OFFLINE', value: '1' },
-    ]);
+    const [args, setArgs] = useState<{id: number, key: string, value: string}[]>([]);
+    const [envVars, setEnvVars] = useState<{id: number, key: string, value: string}[]>([]);
 
     const [minInstances, setMinInstances] = useState(0);
     const [maxInstances, setMaxInstances] = useState(1);
@@ -489,6 +538,35 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
     const [isDeploying, setIsDeploying] = useState(false);
     const [deployError, setDeployError] = useState<string | null>(null);
     const [deployProgress, setDeployProgress] = useState<({ message?: string; error?: string } | { creationStarted?: boolean; serviceName?: string; region?: string })[]>([]);
+
+    useEffect(() => {
+        if (model.source === 'ollama') {
+            setServiceName(`ollama-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
+            setContainerImage('ollama/ollama');
+            setContainerPort('11434');
+            setArgs([]);
+            setEnvVars([
+                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama` },
+                { id: 2, key: 'OLLAMA_DEBUG', value: 'false' },
+                { id: 3, key: 'OLLAMA_KEEP_ALIVE', value: '-1' },
+                { id: 4, key: 'MODEL', value: model.id },
+            ]);
+        } else { // Default to vLLM for huggingface
+            setServiceName(`vllm-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
+            setContainerImage('vllm/vllm-openai');
+            setContainerPort('8000');
+            setArgs([
+                { id: 1, key: '--model', value: `/gcs/${bucket.name}/${model.id}` },
+                { id: 2, key: '--tensor-parallel-size', value: '1' },
+                { id: 3, key: '--port', value: '8000' },
+                { id: 4, key: '--gpu-memory-utilization', value: '0.80' },
+                { id: 5, key: '--max-num-seqs', value: '128' },
+            ]);
+            setEnvVars([
+                { id: 1, key: 'HF_HUB_OFFLINE', value: '1' },
+            ]);
+        }
+    }, [model, bucket.name]);
 
     const handleArgChange = (id: number, field: 'key' | 'value', value: string) => {
         setArgs(args.map(arg => arg.id === id ? { ...arg, [field]: value } : arg));
