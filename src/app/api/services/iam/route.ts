@@ -68,14 +68,20 @@ export async function POST(request: Request) {
     invokerBinding.members = invokerBinding.members || [];
 
     if (addPrincipal) {
-      let formattedPrincipal = addPrincipal;
-      // IAM requires service account principals to be prefixed.
-      if (addPrincipal.endsWith('.gserviceaccount.com') && !addPrincipal.startsWith('serviceAccount:')) {
-        formattedPrincipal = `serviceAccount:${addPrincipal}`;
+      let principal = addPrincipal;
+      
+      // If a prefix like `user:` exists, remove it.
+      if (principal.includes(':')) {
+        principal = principal.split(':')[1];
       }
 
-      if (!invokerBinding.members.includes(formattedPrincipal)) {
-        invokerBinding.members.push(formattedPrincipal);
+      // Ensure the correct `serviceAccount:` prefix is used for service accounts.
+      if (principal.endsWith('.gserviceaccount.com')) {
+        principal = `serviceAccount:${principal}`;
+      }
+
+      if (!invokerBinding.members.includes(principal)) {
+        invokerBinding.members.push(principal);
       }
     } else if (isPublic === true) {
       if (!invokerBinding.members.includes('allUsers')) {
