@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { SUPPORTED_REGIONS, RegionConfig } from '@/app/config/regions';
+import React, { useState, useEffect, useCallback } from 'react';
+import { SUPPORTED_REGIONS } from '@/app/config/regions';
 import { Project } from '../general/general.component';
 
 // --- Interfaces ---
@@ -28,6 +28,8 @@ interface DownloadProgress {
     progress?: number;
     total?: number;
     error?: string;
+    files?: { name: string; total: number; downloaded: number }[];
+    totalProgress?: number;
 }
 
 // --- Helper Components ---
@@ -54,7 +56,7 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
   const [error, setError] = useState<string | null>(null);
   const [deployingModel, setDeployingModel] = useState<{model: Model, bucket: Bucket} | null>(null);
 
-  const fetchBuckets = async () => {
+  const fetchBuckets = useCallback(async () => {
     if (!selectedProject) return;
     setIsLoading(true);
     setError(null);
@@ -63,18 +65,19 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
       if (!response.ok) throw new Error('Failed to fetch buckets.');
       const data = await response.json();
       setBuckets(data);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedProject]);
 
   useEffect(() => {
     if (viewMode === 'list') {
       fetchBuckets();
     }
-  }, [selectedProject, viewMode]);
+  }, [selectedProject, viewMode, fetchBuckets]);
 
   const handleDeployClick = (model: Model, bucket: Bucket) => {
     setDeployingModel({ model, bucket });
@@ -139,7 +142,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     const [preflightError, setPreflightError] = useState<string | null>(null);
 
     const [isDownloading, setIsDownloading] = useState(false);
-    const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+    const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>({ files: [], totalProgress: 0 });
     const [downloadError, setDownloadError] = useState<string | null>(null);
 
     useEffect(() => {
@@ -186,8 +189,9 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
             setProjectBuckets(prev => [...prev, newBucket]);
             setTargetBucket(newBucket.name);
             setShowCreateBucketForm(false);
-        } catch (err: any) {
-            setCreateBucketError(err.message);
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+            setCreateBucketError(errorMessage);
         } finally {
             setIsCreatingBucket(false);
         }
@@ -209,8 +213,9 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
             }
             setPreflightInfo(data);
             setStep(3);
-        } catch (err: any) {
-            setPreflightError(err.message);
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+            setPreflightError(errorMessage);
         } finally {
             setIsPreflighting(false);
         }
@@ -219,8 +224,37 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     const handleStartDownload = async () => {
         setIsDownloading(true);
         setDownloadError(null);
-        setDownloadProgress({ message: 'Starting download...' });
+        setDownloadProgress({ 
+            message: 'Starting download...',
+            files: preflightInfo!.files.map(f => ({ name: f.name, total: f.size, downloaded: 0 })),
+            totalProgress: 0,
+        });
         setStep(4);
+
+        const verifyDownload = async (retryCount = 0): Promise<void> => {
+            setDownloadProgress(prev => ({ ...prev, message: `Verifying download (attempt ${retryCount + 1})...` }));
+            try {
+                const verifyResponse = await fetch(`/api/models/import/verify?projectId=${project.projectId}&bucketName=${targetBucket}&modelId=${modelId}`);
+                const verifyData = await verifyResponse.json();
+
+                if (verifyResponse.ok && verifyData.verified) {
+                    setDownloadProgress(prev => ({ ...prev, message: 'Verification successful! Import complete.' }));
+                    setTimeout(onImportSuccess, 2000);
+                    setIsDownloading(false);
+                } else {
+                    throw new Error(verifyData.error || 'Verification failed.');
+                }
+            } catch (err: unknown) {
+                const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+                console.error(`Verification attempt ${retryCount + 1} failed:`, err);
+                if (retryCount < 2) { // 3 retries total (0, 1, 2)
+                    setTimeout(() => verifyDownload(retryCount + 1), 3000); // Wait 3 seconds before retrying
+                } else {
+                    setDownloadError(`Download completed, but verification failed after 3 attempts. Please check the bucket and try importing again. Error: ${errorMessage}`);
+                    setIsDownloading(false);
+                }
+            }
+        };
 
         try {
             const response = await fetch('/api/models/import/start', {
@@ -232,6 +266,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                     hfToken,
                     projectId: project.projectId,
                     totalSize: preflightInfo?.totalSize,
+                    files: preflightInfo?.files, // <-- Add this line
                 }),
             });
 
@@ -242,8 +277,8 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) {
-                    setDownloadProgress({ message: 'Download complete! Metadata updated.' });
-                    setTimeout(onImportSuccess, 2000);
+                    setDownloadProgress(prev => ({ ...prev, message: 'Download stream complete. Starting verification...' }));
+                    await verifyDownload();
                     break;
                 }
                 
@@ -256,21 +291,43 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                         try {
                             const json = JSON.parse(message.substring(6));
                             if (json.error) {
+                                console.error("Download error from server:", json.error);
                                 setDownloadError(json.error);
                                 setIsDownloading(false);
                                 return;
                             }
-                            setDownloadProgress(json);
+                            
+                            setDownloadProgress(prev => {
+                                const newFiles = prev.files?.map(f => {
+                                    if (f.name === json.file) {
+                                        return { ...f, downloaded: json.progress };
+                                    }
+                                    return f;
+                                }) || [];
+
+                                const totalDownloaded = newFiles.reduce((acc, f) => acc + f.downloaded, 0);
+                                const totalSize = newFiles.reduce((acc, f) => acc + f.total, 0);
+                                const totalProgress = totalSize > 0 ? (totalDownloaded / totalSize) * 100 : 0;
+
+                                return {
+                                    ...prev,
+                                    message: json.message || prev.message,
+                                    files: newFiles,
+                                    totalProgress: totalProgress,
+                                };
+                            });
+
                         } catch (e) {
-                            console.error("Failed to parse SSE chunk", message);
+                            console.error("Failed to parse SSE chunk", message, e);
                         }
                     }
                     boundary = buffer.indexOf('\n\n');
                 }
             }
-        } catch (err: any) {
-            setDownloadError(err.message);
-        } finally {
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+            console.error("Download initiation failed:", err);
+            setDownloadError(errorMessage);
             setIsDownloading(false);
         }
     };
@@ -365,18 +422,28 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                 {step === 4 && (
                     <div className="bg-white border border-gray-200 rounded-md">
                         <div className="p-4 border-b"><h2 className="text-base font-medium">Download Progress</h2></div>
-                        <div className="p-4 space-y-2">
+                        <div className="p-4 space-y-4">
                             {downloadError && <p className="text-red-500">{downloadError}</p>}
-                            {downloadProgress?.message && <p>{downloadProgress.message}</p>}
-                            {downloadProgress?.file && (
-                                <div>
-                                    <p className="font-mono text-sm">{downloadProgress.file}</p>
-                                    <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                        <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${(downloadProgress.progress! / downloadProgress.total!) * 100}%` }}></div>
-                                    </div>
-                                    <p className="text-sm text-gray-600">{formatBytes(downloadProgress.progress!)} / {formatBytes(downloadProgress.total!)}</p>
+                            
+                            <div>
+                                <p className="font-medium">Overall Progress: {downloadProgress.totalProgress?.toFixed(2) ?? 0}%</p>
+                                <div className="w-full bg-gray-200 rounded-full h-2.5 mt-1">
+                                    <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${downloadProgress.totalProgress ?? 0}%` }}></div>
                                 </div>
-                            )}
+                            </div>
+
+                            <div className="space-y-2 pt-2 border-t">
+                                {downloadProgress.files?.map(file => (
+                                    <div key={file.name}>
+                                        <p className="font-mono text-sm">{file.name}</p>
+                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                            <div className="bg-green-600 h-2.5 rounded-full" style={{ width: `${(file.downloaded / file.total) * 100}%` }}></div>
+                                        </div>
+                                        <p className="text-sm text-gray-600">{formatBytes(file.downloaded)} / {formatBytes(file.total)}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            {downloadProgress.message && <p className="text-sm text-gray-600 italic mt-2">{downloadProgress.message}</p>}
                         </div>
                     </div>
                 )}
@@ -421,7 +488,7 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
     
     const [isDeploying, setIsDeploying] = useState(false);
     const [deployError, setDeployError] = useState<string | null>(null);
-    const [deployProgress, setDeployProgress] = useState<any[]>([]);
+    const [deployProgress, setDeployProgress] = useState<({ message?: string; error?: string } | { creationStarted?: boolean; serviceName?: string; region?: string })[]>([]);
 
     const handleArgChange = (id: number, field: 'key' | 'value', value: string) => {
         setArgs(args.map(arg => arg.id === id ? { ...arg, [field]: value } : arg));
@@ -461,7 +528,7 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                 if (data.exists) {
                     setServiceNameError(`Service "${serviceName}" already exists in ${bucket.location}.`);
                 }
-            } catch (error) {
+            } catch {
                 setServiceNameError('Failed to verify service name.');
             } finally {
                 setIsCheckingName(false);
@@ -528,14 +595,15 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                         }
 
                         setDeployProgress(prev => [...prev, json]);
-                    } catch (e) {
+                    } catch {
                         console.error("Failed to parse SSE chunk", value);
                     }
                 }
             }
-        } catch (err: any) {
-            setDeployError(err.message);
-            setDeployProgress(prev => [...prev, { error: err.message }]);
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+            setDeployError(errorMessage);
+            setDeployProgress(prev => [...prev, { error: errorMessage }]);
         } finally {
             setIsDeploying(false);
         }
@@ -561,7 +629,7 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700">Region</label>
-                            <p className="mt-1 text-sm text-gray-800">{bucket.location} (locked to model's region)</p>
+                            <p className="mt-1 text-sm text-gray-800">{bucket.location} (locked to model&apos;s region)</p>
                         </div>
                     </div>
                 </div>
@@ -691,7 +759,7 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                     <div className="bg-white border border-gray-200 rounded-md">
                         <div className="p-4 border-b"><h2 className="text-base font-medium">Deployment Progress</h2></div>
                         <div className="p-4 font-mono text-xs h-64 overflow-y-auto bg-gray-900 text-white rounded-b-md">
-                            {deployProgress.map((p, i) => <p key={i}>{p.message || p.error || JSON.stringify(p)}</p>)}
+                            {deployProgress.map((p, i) => <p key={i}>{'message' in p ? p.message : 'error' in p ? p.error : JSON.stringify(p)}</p>)}
                         </div>
                     </div>
                 )}

@@ -51,10 +51,6 @@ const Sidebar = ({ activeView, onViewChange, isCollapsed, onToggleCollapse }: Si
         ))}
       </nav>
       <div className="p-2 border-t border-gray-200">
-        <a href="#" className="flex items-center h-10 px-3 rounded-md text-gray-600 hover:bg-gray-100">
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-          {!isCollapsed && <span className="ml-3 text-sm font-medium">Release notes</span>}
-        </a>
       </div>
     </aside>
   );
