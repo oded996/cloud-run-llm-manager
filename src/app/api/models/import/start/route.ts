@@ -99,7 +99,9 @@ async function syncModelToGCS(
         const fileSize = file.size || 0;
         let downloadedSize = 0;
 
-        const gcsWriteStream = gcsFile.createWriteStream();
+        const gcsWriteStream = gcsFile.createWriteStream({
+          highWaterMark: 16 * 1024 * 1024, // 16 MB buffer for better performance
+        });
         const reader = downloadResponse.body!.getReader();
 
         gcsWriteStream.on('finish', () => {
