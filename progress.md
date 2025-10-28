@@ -11,6 +11,24 @@ This document serves as a running changelog to track the progress of the Cloud R
 - **Be Specific but Concise:** Briefly describe each change. For bugs, include a short summary of the issue and the solution.
 - **Update Chronologically:** Always add the newest entries at the top of the file.
 
+## 2025-10-27 (Afternoon Session)
+
+### Implemented Features
+
+- **Ollama Integration:**
+    - Implemented a complete end-to-end workflow for downloading and deploying Ollama models.
+    - **Model Import:** Created new backend APIs (`/api/models/import/ollama/*`) to stream models directly from the public Ollama OCI registry to GCS. This avoids the need for a local Ollama instance or intermediate file storage.
+    - **GCS Structure:** The download logic now saves model files to the precise OCI-compliant directory structure that the Ollama container expects (`/blobs/sha256-<hash>`), resolving "file not found" errors at runtime.
+    - **Deployment:** The "Deploy Model" view now dynamically configures the service for Ollama, setting the correct container image (`ollama/ollama`), port (`11434`), and environment variables (`OLLAMA_MODELS`, `MODEL`).
+    - **Chat Support:** The "Chat" component is now fully compatible with Ollama services. It detects the model source, calls the correct API endpoint (`/api/chat`), and correctly parses Ollama's native streaming JSON response format.
+
+### Bug Fixes & UX Improvements
+
+- **Model Source Selection:** Replaced the "Model Source" dropdown with a more intuitive side-by-side card layout, which includes descriptions to help users choose between vLLM and Ollama.
+- **Chat Streaming:** Fixed a React state management issue that was preventing the chat response from streaming token-by-token. The UI now updates correctly as each chunk is received.
+- **Log Viewer Layout:** Corrected a CSS issue where the live log viewer would expand horizontally and break the page layout. The component now correctly contains long log lines with a horizontal scrollbar.
+- **Build Failures:** Resolved a series of TypeScript and syntax errors across multiple components (`services.component.tsx`, `chat.component.tsx`, `models.component.tsx`) that were causing the `npm run build` command to fail.
+
 ## 2025-10-27
 
 ### Bug Fixes & UX Improvements

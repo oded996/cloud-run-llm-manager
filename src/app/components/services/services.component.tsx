@@ -345,28 +345,43 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
                 {project && <PermissionsCard project={project} region={region} serviceName={serviceName} />}
 
                 <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">Live Logs</h2></div>
-                    <div ref={logContainerRef} className="p-4 font-mono text-xs h-64 overflow-y-auto overflow-x-auto bg-gray-900 text-white rounded-b-md whitespace-pre">
-                        {logError && <p className="text-yellow-400">{logError}</p>}
-                        {logs.map((log, i) => (
-                            <p key={i}>
-                                <span className="text-gray-400">
-                                    {(() => {
-                                        const ts = log.timestamp;
-                                        if (ts && typeof ts.seconds === 'number') {
-                                            return new Date(ts.seconds * 1000 + (ts.nanos || 0) / 1000000).toLocaleString();
-                                        }
-                                        // Handle cases where timestamp might be a string or other formats, or missing.
-                                        if (ts && !isNaN(new Date(ts as any).getTime())) {
-                                            return new Date(ts as any).toLocaleString();
-                                        }
-                                        return 'No timestamp';
-                                    })()} 
-                                </span>: {typeof log.message === 'object' ? JSON.stringify(log.message) : log.message}
-                            </p>
-                        ))}
-                    </div>
-                </div>
+                  <div className="p-4 border-b">
+                    <h2 className="text-base font-medium">Live Logs</h2>
+                  </div>
+                  <div
+                    ref={logContainerRef}
+                    className="
+                      p-4 font-mono text-xs h-64
+                      overflow-y-auto
+                      bg-gray-900 text-white rounded-b-md
+                      whitespace-pre-wrap break-words
+                    "
+                  >
+                    {logError && <p className="text-yellow-400">{logError}</p>}
+                    {logs.map((log, i) => (
+                      <p key={i}>
+                        <span className="text-gray-400">
+                          {(() => {
+                            const ts = log.timestamp;
+                            if (ts && typeof ts.seconds === "number") {
+                              return new Date(
+                                ts.seconds * 1000 + (ts.nanos || 0) / 1000000
+                              ).toLocaleString();
+                            }
+                            if (ts && !isNaN(new Date(ts).getTime())) {
+                              return new Date(ts).toLocaleString();
+                            }
+                            return "No timestamp";
+                          })()}
+                        </span>
+                        :{" "}
+                        {typeof log.message === "object"
+                          ? JSON.stringify(log.message)
+                          : log.message}
+                      </p>
+                    ))}
+                  </div>
+</div>
 
                 {status === 'Running' && service.uri && <ChatCard serviceUrl={service.uri} modelSource={modelSource} />}
             </div>
