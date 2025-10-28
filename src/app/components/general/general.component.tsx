@@ -26,6 +26,7 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
   const [isLoadingInitialData, setIsLoadingInitialData] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [isEditingProject, setIsEditingProject] = useState(false);
+  const [isProjectLocked, setIsProjectLocked] = useState(false);
 
   const [apiStatus, setApiStatus] = useState<{ [key: string]: boolean | null }>({
     'run.googleapis.com': null,
@@ -69,6 +70,7 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
       const envData = await envResponse.json();
 
       if (envData.isProjectLocked) {
+        setIsProjectLocked(true);
         try {
           const projectDetailsResponse = await fetch(`/api/project/details?projectId=${encodeURIComponent(envData.lockedProjectId)}`);
           if (projectDetailsResponse.ok) {
@@ -85,6 +87,7 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
           onProjectSelect({ projectId: envData.lockedProjectId, name: envData.lockedProjectId });
         }
       } else {
+        setIsProjectLocked(false);
         // If not locked, proceed with the existing local storage logic
         const savedProjectId = localStorage.getItem('selectedProject');
         let projectLoadedFromStorage = false;
@@ -293,7 +296,9 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
                   </div>
                 </div>
               ) : <p className="text-sm text-gray-500">Select a project</p>}
-              <button onClick={() => setIsEditingProject(true)} className="text-sm font-medium text-blue-600 hover:underline">Change</button>
+              {!isProjectLocked && (
+                <button onClick={() => setIsEditingProject(true)} className="text-sm font-medium text-blue-600 hover:underline">Change</button>
+              )}
             </div>
           )}
         </div>
