@@ -12,7 +12,7 @@ function nodeStreamToWebStream(nodeStream: NodeJS.ReadableStream): ReadableStrea
       nodeStream.on('error', (err) => controller.error(err));
     },
     cancel() {
-      nodeStream.destroy();
+      (nodeStream as any).destroy();
     },
   });
 }
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
 
     // Forward relevant headers from the downstream service to the client
     const headers = new Headers();
-    const contentType = proxyResponse.headers['content-type'];
+    const contentType = (proxyResponse.headers as any)['content-type'];
     if (contentType) {
       headers.set('Content-Type', contentType);
     }
