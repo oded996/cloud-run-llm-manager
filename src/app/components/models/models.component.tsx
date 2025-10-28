@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { SUPPORTED_REGIONS } from '@/app/config/regions';
-import { Project } from '../general/general.component';
+import { Project, Tooltip } from '../general/general.component';
 
 // --- Interfaces ---
 interface Model {
@@ -54,29 +54,56 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
   const [viewMode, setViewMode] = useState<'list' | 'import' | 'deploy'>('list');
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deployingModel, setDeployingModel] = useState<{model: Model, bucket: Bucket} | null>(null);
 
-  const fetchBuckets = useCallback(async () => {
-    if (!selectedProject) return;
-    setIsLoading(true);
+  const cacheKey = selectedProject ? `llm_manager_models_cache_${selectedProject.projectId}` : null;
+
+  const fetchBuckets = useCallback(async (isForcedRefresh = false) => {
+    if (!selectedProject || !cacheKey) return;
+
+    setIsRefreshing(true);
+    // On initial load, check for cache. If it exists, the main loader is turned off.
+    if (!isForcedRefresh) {
+        const cachedData = localStorage.getItem(cacheKey);
+        if (cachedData) {
+            setBuckets(JSON.parse(cachedData));
+            setIsLoading(false);
+        }
+    }
+    
     setError(null);
+
     try {
       const response = await fetch(`/api/models/buckets?projectId=${selectedProject.projectId}`);
       if (!response.ok) throw new Error('Failed to fetch buckets.');
       const data = await response.json();
-      setBuckets(data);
+      
+      const cachedData = localStorage.getItem(cacheKey);
+      if (JSON.stringify(data) !== cachedData) {
+        setBuckets(data);
+        localStorage.setItem(cacheKey, JSON.stringify(data));
+      }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
       setError(errorMessage);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
-  }, [selectedProject]);
+  }, [selectedProject, cacheKey]);
+
+  const invalidateCacheAndRefresh = useCallback(() => {
+    if (cacheKey) {
+        localStorage.removeItem(cacheKey);
+    }
+    fetchBuckets(true);
+  }, [cacheKey, fetchBuckets]);
 
   useEffect(() => {
-    if (viewMode === 'list') {
-      fetchBuckets();
+    if (viewMode === 'list' && selectedProject) {
+      fetchBuckets(false); // Initial fetch
     }
   }, [selectedProject, viewMode, fetchBuckets]);
 
@@ -92,7 +119,7 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
         onClose={() => setViewMode('list')}
         onImportSuccess={() => {
           setViewMode('list');
-          fetchBuckets();
+          invalidateCacheAndRefresh();
         }}
       />
     );
@@ -118,6 +145,8 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
       error={error}
       onImportClick={() => setViewMode('import')}
       onDeployClick={handleDeployClick}
+      isRefreshing={isRefreshing}
+      onRefresh={() => fetchBuckets(true)}
     />
   );
 };
@@ -853,7 +882,20 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
     );
 };
 
-const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick, onDeployClick }: { selectedProject: Project | null, buckets: Bucket[], isLoading: boolean, error: string | null, onImportClick: () => void, onDeployClick: (model: Model, bucket: Bucket) => void }) => {
+const RefreshIcon = ({ isRefreshing }: { isRefreshing: boolean }) => (
+    <svg
+        fill="currentColor"
+        width="20px"
+        height="20px"
+        viewBox="0 0 24 24"
+        xmlns="http://www.w.org/2000/svg"
+        className={isRefreshing ? 'animate-spin' : ''}
+    >
+        <path d="M10 11H7.101l.001-.009a4.956 4.956 0 0 1 .752-1.787 5.054 5.054 0 0 1 2.2-1.811c.302-.128.617-.226.938-.291a5.078 5.078 0 0 1 2.018 0 4.978 4.978 0 0 1 2.525 1.361l1.416-1.412a7.036 7.036 0 0 0-2.224-1.501 6.921 6.921 0 0 0-1.315-.408 7.079 7.079 0 0 0-2.819 0 6.94 6.94 0 0 0-1.316.409 7.04 7.04 0 0 0-3.08 2.534 6.978 6.978 0 0 0-1.054 2.505c-.028.135-.043.273-.063.41H2l4 4 4-4zm4 2h2.899l-.001.008a4.976 4.976 0 0 1-2.103 3.138 4.943 4.943 0 0 1-1.787.752 5.073 5.073 0 0 1-2.017 0 4.956 4.956 0 0 1-1.787-.752 5.072 5.072 0 0 1-.74-.61L7.05 16.95a7.032 7.032 0 0 0 2.225 1.5c.424.18.867.317 1.315.408a7.07 7.07 0 0 0 2.818 0 7.031 7.031 0 0 0 4.395-2.945 6.974 6.974 0 0 0 1.053-2.503c.027-.135.043-.273.063-.41H22l-4-4-4 4z"/>
+    </svg>
+);
+
+const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick, onDeployClick, isRefreshing, onRefresh }: { selectedProject: Project | null, buckets: Bucket[], isLoading: boolean, error: string | null, onImportClick: () => void, onDeployClick: (model: Model, bucket: Bucket) => void, isRefreshing: boolean, onRefresh: () => void }) => {
 
   const getGpuRecommendations = (modelSize: number, region: string) => {
     const estimatedVramGb = (modelSize / (1024 * 1024 * 1024)) * 1.2; // size in bytes to GB + 20% overhead
@@ -870,7 +912,18 @@ const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick,
   return (
     <div className="p-6">
       <div className="flex justify-between items-center pb-4 border-b border-gray-200 mb-4">
-        <h1 className="text-xl font-medium text-gray-800">Models</h1>
+        <div className="flex items-center space-x-2">
+            <h1 className="text-xl font-medium text-gray-800">Models</h1>
+            <Tooltip text="Refresh models list">
+                <button
+                    onClick={onRefresh}
+                    disabled={isRefreshing || !selectedProject}
+                    className="p-1 rounded-full text-gray-500 hover:bg-gray-100 disabled:text-gray-300 disabled:hover:bg-transparent"
+                >
+                    <RefreshIcon isRefreshing={isRefreshing} />
+                </button>
+            </Tooltip>
+        </div>
         <button
           onClick={onImportClick}
           disabled={!selectedProject}
@@ -901,7 +954,7 @@ const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick,
               {bucket.models.length > 0 ? (
                 <ul className="divide-y divide-gray-200">
                   {bucket.models.map(model => {
-                    const { estimatedVramGb, recommendations } = model.size ? getGpuRecommendations(model.size, bucket.location) : { estimatedVramGb: 0, recommendations: [] };
+                    const { estimatedVramGb, recommendations } = model.size ? getGpuRecommendations(model.size, bucket.location.toLowerCase()) : { estimatedVramGb: 0, recommendations: [] };
                     return (
                       <li key={model.id} className="py-4">
                         <div className="flex justify-between items-center mb-2">

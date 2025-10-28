@@ -20,6 +20,7 @@ export const PermissionsCard = ({ project, region, serviceName }: PermissionsCar
   const [invokerPrincipals, setInvokerPrincipals] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryStatus, setRetryStatus] = useState<string | null>(null);
   const [newPrincipal, setNewPrincipal] = useState('');
   const [appIdentity, setAppIdentity] = useState<AppIdentity | null>(null);
 
@@ -39,23 +40,43 @@ export const PermissionsCard = ({ project, region, serviceName }: PermissionsCar
   }, []);
 
   const fetchPermissions = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/services/iam?projectId=${project.projectId}&region=${region}&serviceName=${serviceName}`);
-      if (!response.ok) throw new Error('Failed to fetch IAM policy.');
-      const data = await response.json();
-      setIsPublic(data.isPublic);
-      setInvokerPrincipals(data.invokerPrincipals || []);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
+    const response = await fetch(`/api/services/iam?projectId=${project.projectId}&region=${region}&serviceName=${serviceName}`);
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch IAM policy.');
     }
+    const data = await response.json();
+    setIsPublic(data.isPublic);
+    setInvokerPrincipals(data.invokerPrincipals || []);
   };
 
   useEffect(() => {
-    fetchPermissions();
+    const fetchPermissionsWithRetry = async () => {
+        setIsLoading(true);
+        setError(null);
+        setRetryStatus(null);
+
+        for (let attempt = 1; attempt <= 10; attempt++) {
+            try {
+                await fetchPermissions();
+                setError(null);
+                setRetryStatus(null);
+                setIsLoading(false);
+                return; // Success, exit the loop
+            } catch (err: any) {
+                if (attempt < 10) {
+                    setRetryStatus(`Could not get IAM policy. Retrying in 5 seconds... (Attempt ${attempt}/10)`);
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                } else {
+                    setError(`Failed to fetch IAM policy after 10 attempts: ${err.message}`);
+                    setRetryStatus(null);
+                    setIsLoading(false);
+                }
+            }
+        }
+    };
+
+    fetchPermissionsWithRetry();
   }, [project, region, serviceName]);
 
   const handleSetPublic = async (isPublic: boolean) => {
@@ -67,7 +88,10 @@ export const PermissionsCard = ({ project, region, serviceName }: PermissionsCar
         body: JSON.stringify({ projectId: project.projectId, region, serviceName, isPublic }),
       });
       if (!response.ok) throw new Error('Failed to update IAM policy.');
-      fetchPermissions();
+      // Re-fetch permissions without the retry logic for immediate feedback
+      setIsLoading(true);
+      await fetchPermissions();
+      setIsLoading(false);
     } catch (err: any) {
       setError(err.message);
     }
@@ -84,7 +108,10 @@ export const PermissionsCard = ({ project, region, serviceName }: PermissionsCar
       });
       if (!response.ok) throw new Error('Failed to add principal.');
       setNewPrincipal('');
-      fetchPermissions();
+      // Re-fetch permissions without the retry logic for immediate feedback
+      setIsLoading(true);
+      await fetchPermissions();
+      setIsLoading(false);
     } catch (err: any) {
       setError(err.message);
     }
@@ -95,8 +122,9 @@ export const PermissionsCard = ({ project, region, serviceName }: PermissionsCar
       <div className="p-4 border-b"><h2 className="text-base font-medium">Permissions</h2></div>
       <div className="p-4 space-y-4">
         {isLoading && <p>Loading permissions...</p>}
+        {retryStatus && <p className="text-yellow-600 text-sm">{retryStatus}</p>}
         {error && <p className="text-red-500">{error}</p>}
-        {!isLoading && !error && (
+        {!isLoading && !error && !retryStatus && (
           <>
             <div className="space-y-2">
               <div className="flex items-center">

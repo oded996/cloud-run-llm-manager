@@ -329,3 +329,23 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
 };
 
 export default General;
+
+export const Tooltip = ({ text, children }: { text: string, children: React.ReactNode }) => {
+  const [isVisible, setIsVisible] = useState(false);
+
+  return (
+    <div
+      className="relative inline-block"
+      onMouseEnter={() => setIsVisible(true)}
+      onMouseLeave={() => setIsVisible(false)}
+    >
+      {children}
+      {isVisible && (
+        <div className="absolute z-10 px-2 py-1 text-sm font-medium text-white bg-gray-800 rounded-md shadow-sm bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap">
+          {text}
+          <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-x-4 border-x-transparent border-t-4 border-t-gray-800"></div>
+        </div>
+      )}
+    </div>
+  );
+};

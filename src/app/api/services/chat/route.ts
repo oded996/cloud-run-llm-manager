@@ -1,6 +1,21 @@
 // src/app/api/services/chat/route.ts
 import { NextResponse } from 'next/server';
 import { GoogleAuth } from 'google-auth-library';
+import { GaxiosOptions } from 'gaxios';
+
+// Helper to convert a Node.js Readable stream to a Web ReadableStream
+function nodeStreamToWebStream(nodeStream: NodeJS.ReadableStream): ReadableStream {
+  return new ReadableStream({
+    start(controller) {
+      nodeStream.on('data', (chunk) => controller.enqueue(chunk));
+      nodeStream.on('end', () => controller.close());
+      nodeStream.on('error', (err) => controller.error(err));
+    },
+    cancel() {
+      nodeStream.destroy();
+    },
+  });
+}
 
 export async function POST(request: Request) {
   const { serviceUrl, path, payload, method = 'POST' } = await request.json();
@@ -10,35 +25,48 @@ export async function POST(request: Request) {
   }
 
   try {
-    console.log(`[CHAT_PROXY] Authenticating to call ${serviceUrl}`);
     const auth = new GoogleAuth();
     const client = await auth.getIdTokenClient(serviceUrl);
 
     const proxyUrl = new URL(path, serviceUrl).toString();
-    console.log(`[CHAT_PROXY] Forwarding ${method} request to ${proxyUrl}`);
+    console.log(`[CHAT_PROXY] Forwarding streaming ${method} request to ${proxyUrl}`);
 
-    const proxyResponse = await client.request({
-      url: proxyUrl,
-      method: method,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      ...(method !== 'GET' && { body: JSON.stringify(payload) }),
-    });
+    const requestConfig: GaxiosOptions = {
+        url: proxyUrl,
+        method: method,
+        headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+        },
+        responseType: 'stream',
+    };
 
-    console.log(`[CHAT_PROXY] Received response with status: ${proxyResponse.status}`);
-
-    const contentType = proxyResponse.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const data = await proxyResponse.data;
-      console.log('[CHAT_PROXY] Returning JSON response to client:', data);
-      return NextResponse.json(data as any);
+    // gaxios uses the `data` property for the request body
+    if (method !== 'GET' && payload) {
+        requestConfig.data = payload;
     }
 
-    console.log('[CHAT_PROXY] Returning non-JSON response to client.');
-    return new Response(proxyResponse.data as any, {
+    const proxyResponse = await client.request(requestConfig);
+
+    console.log(`[CHAT_PROXY] Received streaming response with status: ${proxyResponse.status}`);
+
+    const nodeStream = proxyResponse.data as NodeJS.ReadableStream;
+    const webStream = nodeStreamToWebStream(nodeStream);
+
+    // Forward relevant headers from the downstream service to the client
+    const headers = new Headers();
+    const contentType = proxyResponse.headers['content-type'];
+    if (contentType) {
+      headers.set('Content-Type', contentType);
+    }
+    // These headers are important for streaming
+    headers.set('Cache-Control', 'no-cache');
+    headers.set('Connection', 'keep-alive');
+
+    return new Response(webStream, {
       status: proxyResponse.status,
-      headers: { 'Content-Type': 'text/plain' },
+      statusText: proxyResponse.statusText,
+      headers: headers,
     });
 
   } catch (error: any) {

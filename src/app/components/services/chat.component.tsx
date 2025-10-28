@@ -32,7 +32,7 @@ export const ChatCard = ({ serviceUrl, modelSource }: { serviceUrl: string, mode
         // Choose the path and method based on the model source
         const isOllama = modelSource === 'ollama';
         const path = isOllama ? '/api/tags' : '/v1/models';
-        const method = isOllama ? 'GET' : 'POST'; // Ollama uses GET, vLLM uses POST (or GET)
+        const method = isOllama ? 'GET' : 'GET'; // Ollama uses GET, vLLM also uses GET for listing models
 
         const response = await fetch('/api/services/chat', {
           method: 'POST', // Our proxy always uses POST
