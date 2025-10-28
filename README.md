@@ -80,4 +80,20 @@ gcloud run deploy llm-manager \
   --allow-unauthenticated
 ```
 
+**Optional: Locking to a Single Project**
+
+For a more secure or dedicated setup, you can lock the application to a single Google Cloud Project by setting the `GCP_PROJECT_ID` environment variable. When this variable is set, the project selection UI will be disabled.
+
+You can set this during deployment:
+
+```bash
+gcloud run deploy llm-manager \
+  --project=[PROJECT_ID] \
+  --region=[REGION] \
+  --service-account=llm-manager-sa@[PROJECT_ID].iam.gserviceaccount.com \
+  --source . \
+  --set-env-vars="GCP_PROJECT_ID=[PROJECT_ID_TO_LOCK]" \
+  --allow-unauthenticated
+```
+
 **Note on `--allow-unauthenticated`**: This flag makes your manager UI publicly accessible. For production environments, it is highly recommended to remove this flag and secure your application using [Identity-Aware Proxy (IAP)](https://cloud.google.com/iap).
