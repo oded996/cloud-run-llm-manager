@@ -1,0 +1,25 @@
+# Dockerfile
+Dockerfile
+.dockerignore
+
+# Git
+.git
+.gitignore
+
+# Node
+node_modules
+.npmrc
+npm-debug.log
+yarn-error.log
+
+# Next.js
+.next
+dist
+build
+
+# Env
+.env
+.env.local
+
+# Markdown
+*.md
