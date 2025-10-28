@@ -63,45 +63,68 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
   useEffect(() => {
     const loadInitialData = async () => {
       setIsLoadingInitialData(true);
-      const savedProjectId = localStorage.getItem('selectedProject');
-      let projectLoadedFromStorage = false;
 
-      if (savedProjectId) {
+      // First, check if the project is locked by an environment variable
+      const envResponse = await fetch('/api/project/env');
+      const envData = await envResponse.json();
+
+      if (envData.isProjectLocked) {
         try {
-          const response = await fetch(`/api/project/details?projectId=${encodeURIComponent(savedProjectId)}`);
-          if (response.ok) {
-            const projectDetails = await response.json();
+          const projectDetailsResponse = await fetch(`/api/project/details?projectId=${encodeURIComponent(envData.lockedProjectId)}`);
+          if (projectDetailsResponse.ok) {
+            const projectDetails = await projectDetailsResponse.json();
             onProjectSelect(projectDetails);
             setDraftSelectedProject(projectDetails.projectId);
             setIsEditingProject(false);
-            projectLoadedFromStorage = true;
           } else {
-            localStorage.removeItem('selectedProject');
+            // If fetching details fails, still lock to the ID but show ID as name
+            onProjectSelect({ projectId: envData.lockedProjectId, name: envData.lockedProjectId });
           }
         } catch (error) {
-          console.error('Failed to fetch saved project details:', error);
-          localStorage.removeItem('selectedProject');
+          console.error('Failed to fetch locked project details:', error);
+          onProjectSelect({ projectId: envData.lockedProjectId, name: envData.lockedProjectId });
         }
-      }
+      } else {
+        // If not locked, proceed with the existing local storage logic
+        const savedProjectId = localStorage.getItem('selectedProject');
+        let projectLoadedFromStorage = false;
 
-      if (!projectLoadedFromStorage) {
-        setIsEditingProject(true);
-      }
-
-      Promise.all([
-        (async () => {
+        if (savedProjectId) {
           try {
-            const response = await fetch('/api/project/identity');
-            if (response.ok) setIdentity(await response.json());
-          } catch (error) { console.error('Error fetching identity:', error); }
-        })(),
-        fetchInitialProjects()
-      ]);
+            const response = await fetch(`/api/project/details?projectId=${encodeURIComponent(savedProjectId)}`);
+            if (response.ok) {
+              const projectDetails = await response.json();
+              onProjectSelect(projectDetails);
+              setDraftSelectedProject(projectDetails.projectId);
+              setIsEditingProject(false);
+              projectLoadedFromStorage = true;
+            } else {
+              localStorage.removeItem('selectedProject');
+            }
+          } catch (error) {
+            console.error('Failed to fetch saved project details:', error);
+            localStorage.removeItem('selectedProject');
+          }
+        }
+
+        if (!projectLoadedFromStorage) {
+          setIsEditingProject(true);
+        }
+        
+        fetchInitialProjects();
+      }
+
+      // Fetch identity regardless
+      try {
+        const response = await fetch('/api/project/identity');
+        if (response.ok) setIdentity(await response.json());
+      } catch (error) { console.error('Error fetching identity:', error); }
+      
       setIsLoadingInitialData(false);
     };
 
     loadInitialData();
-  }, []);
+  }, [onProjectSelect]);
 
   // Debounced effect for searching projects
   useEffect(() => {
