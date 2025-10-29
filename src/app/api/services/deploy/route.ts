@@ -43,6 +43,8 @@ async function deployService(payload: any, sendEvent: (data: any) => void) {
                   args,
                   envVars,
                   bucketName,
+                  useVpc,
+                  subnet,
               } = payload;
           
               try {
@@ -57,45 +59,68 @@ async function deployService(payload: any, sendEvent: (data: any) => void) {
                   });
           
                   sendEvent({ message: 'Constructing service configuration...' });
-        const serviceConfig = {
-            template: {
-                gpuZonalRedundancyDisabled: gpuZonalRedundancyDisabled,
-                scaling: {
-                    minInstanceCount: minInstances,
-                    maxInstanceCount: maxInstances,
-                },
-                nodeSelector: {accelerator: gpu},
-                containers: [
-                    {
-                        image: containerImage,
-                        ports: [{ containerPort: parseInt(containerPort, 10) }],
-                        resources: {
-                            limits: {
-                                cpu,
-                                memory,
-                                "nvidia.com/gpu": "1",
-                            }
+
+                  const serviceConfig: any = {
+                    template: {
+                        gpuZonalRedundancyDisabled: gpuZonalRedundancyDisabled,
+                        annotations: {},
+                        scaling: {
+                            minInstanceCount: minInstances,
+                            maxInstanceCount: maxInstances,
                         },
-                        args: args.map((arg: { key: string, value: string }) => `${arg.key}=${arg.value}`),
-                        env: envVars.map((env: { key: string, value: string }) => ({ name: env.key, value: env.value })),
-                        volumeMounts: [{
+                        nodeSelector: {
+                            accelerator: gpu,
+                        },
+                        containers: [
+                            {
+                                image: containerImage,
+                                ports: [{ containerPort: parseInt(containerPort, 10) }],
+                                resources: {
+                                    limits: {
+                                        cpu,
+                                        memory,
+                                        'nvidia.com/gpu': '1',
+                                    }
+                                },
+                                args: args.map((arg: { key: string, value: string }) => `${arg.key}=${arg.value}`),
+                                env: envVars.map((env: { key: string, value: string }) => ({ name: env.key, value: env.value })),
+                                volumeMounts: [{
+                                    name: 'gcs-bucket',
+                                    mountPath: `/gcs/${bucketName}`,
+                                }],
+                            },
+                        ],
+                        volumes: [{
                             name: 'gcs-bucket',
-                            mountPath: `/gcs/${bucketName}`,
+                            gcs: {
+                                bucket: bucketName,
+                                readOnly: true,
+                            }
                         }],
                     },
-                ],
-                volumes: [{
-                    name: 'gcs-bucket',
-                    gcs: {
-                        bucket: bucketName,
-                        readOnly: true,
+                    labels: {
+                        'managed-by': 'llm-manager',
+                    },
+                };
+
+                if (useVpc && subnet) {
+                    sendEvent({ message: `Configuring VPC network interface for subnet: ${subnet}` });
+                    const compute = google.compute({ version: 'v1', auth: client });
+                    const subnetDetails = await compute.subnetworks.get({
+                        project: projectId,
+                        region: region.toLowerCase(),
+                        subnetwork: subnet,
+                    });
+                    const networkName = subnetDetails.data.network?.split('/').pop();
+                    if (!networkName) {
+                        throw new Error(`Could not determine network name for subnet ${subnet}`);
                     }
-                }],
-            },
-            labels: {
-                'managed-by': 'llm-manager',
-            },
-        };    sendEvent({ message: `Initiating deployment for service '${serviceName}'...` });
+
+                    serviceConfig.template.annotations['run.googleapis.com/network-interfaces'] = `[{"network":"${networkName}","subnetwork":"${subnet}"}]`;
+                    serviceConfig.template.annotations['run.googleapis.com/vpc-access-egress'] = 'all-traffic';
+                }
+          
+        sendEvent({ message: `Initiating deployment for service '${serviceName}'...` });
         console.log('Service configuration:', JSON.stringify(serviceConfig, null, 2));
 
         await run.projects.locations.services.create({

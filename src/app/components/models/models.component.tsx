@@ -563,10 +563,112 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
 
     const [minInstances, setMinInstances] = useState(0);
     const [maxInstances, setMaxInstances] = useState(1);
+
+    const [useVpc, setUseVpc] = useState(true);
+    const [subnets, setSubnets] = useState<{name: string, privateIpGoogleAccess: boolean}[]>([]);
+    const [selectedSubnet, setSelectedSubnet] = useState('');
+    const [isSubnetPgaEnabled, setIsSubnetPgaEnabled] = useState(true);
+    const [isLoadingSubnets, setIsLoadingSubnets] = useState(true);
     
     const [isDeploying, setIsDeploying] = useState(false);
     const [deployError, setDeployError] = useState<string | null>(null);
     const [deployProgress, setDeployProgress] = useState<({ message?: string; error?: string } | { creationStarted?: boolean; serviceName?: string; region?: string })[]>([]);
+
+    useEffect(() => {
+        const fetchNetworkingInfo = async () => {
+            if (!project) return;
+            setIsLoadingSubnets(true);
+            try {
+                const response = await fetch(`/api/project/networking?projectId=${project.projectId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const regionData = data.find((r: any) => r.region === bucket.location.toLowerCase());
+                    if (regionData && regionData.subnets.length > 0) {
+                        setSubnets(regionData.subnets);
+                        // Try to select 'default' subnet if it exists, otherwise the first one
+                        const defaultSubnet = regionData.subnets.find((s: any) => s.name === 'default');
+                        const initialSubnetName = defaultSubnet ? defaultSubnet.name : regionData.subnets[0].name;
+                        setSelectedSubnet(initialSubnetName);
+                        setIsSubnetPgaEnabled(
+                            (defaultSubnet || regionData.subnets[0]).privateIpGoogleAccess
+                        );
+                    } else {
+                        setSubnets([]);
+                        setUseVpc(false); // No subnets, so disable VPC
+                    }
+                }
+            } catch (error) {
+                console.error("Failed to fetch networking info", error);
+                setUseVpc(false); // On error, disable VPC
+            } finally {
+                setIsLoadingSubnets(false);
+            }
+        };
+        fetchNetworkingInfo();
+    }, [project, bucket.location]);
+
+    useEffect(() => {
+        // When the selected subnet changes, update the PGA status
+        const currentSubnet = subnets.find(s => s.name === selectedSubnet);
+        if (currentSubnet) {
+            setIsSubnetPgaEnabled(currentSubnet.privateIpGoogleAccess);
+        }
+    }, [selectedSubnet, subnets]);
+
+    useEffect(() => {
+        if (model.source === 'ollama') {
+            setServiceName(`ollama-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
+            setContainerImage('ollama/ollama');
+            setContainerPort('11434');
+            setArgs([]);
+            setEnvVars([
+                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama` },
+                { id: 2, key: 'OLLAMA_DEBUG', value: 'false' },
+                { id: 3, key: 'OLLAMA_KEEP_ALIVE', value: '-1' },
+                { id: 4, key: 'MODEL', value: model.id },
+            ]);
+        } else { // Default to vLLM for huggingface
+            setServiceName(`vllm-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
+            setContainerImage('vllm/vllm-openai');
+            setContainerPort('8000');
+            setArgs([
+                { id: 1, key: '--model', value: `/gcs/${bucket.name}/${model.id}` },
+                { id: 2, key: '--tensor-parallel-size', value: '1' },
+                { id: 3, key: '--port', value: '8000' },
+                { id: 4, key: '--gpu-memory-utilization', value: '0.80' },
+                { id: 5, key: '--max-num-seqs', value: '128' },
+            ]);
+            setEnvVars([
+                { id: 1, key: 'HF_HUB_OFFLINE', value: '1' },
+            ]);
+        }
+    }, [selectedSubnet, subnets]);
+
+    const handleEnablePga = async () => {
+        if (!project || !selectedSubnet) return;
+        
+        try {
+            const response = await fetch('/api/project/networking/subnet/enable-pga', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    projectId: project.projectId,
+                    region: bucket.location.toLowerCase(),
+                    subnetName: selectedSubnet,
+                }),
+            });
+
+            if (!response.ok) throw new Error('Failed to enable PGA.');
+
+            // Optimistically update UI
+            setIsSubnetPgaEnabled(true);
+            setSubnets(subnets.map(s => s.name === selectedSubnet ? { ...s, privateIpGoogleAccess: true } : s));
+
+        } catch (error) {
+            console.error("Failed to enable PGA", error);
+            setDeployError('Failed to enable Private Google Access. Please try again.');
+        }
+    };
 
     useEffect(() => {
         if (model.source === 'ollama') {
@@ -673,6 +775,8 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                     envVars,
                     bucketName: bucket.name,
                     modelId: model.id,
+                    useVpc,
+                    subnet: selectedSubnet,
                 }),
             });
 
@@ -815,6 +919,37 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                                 <span className="ml-2 text-sm text-gray-700">Disable GPU zonal redundancy (cost saving)</span>
                             </label>
                         </div>
+                    </div>
+                </div>
+
+                {/* VPC Networking */}
+                <div className="bg-white border border-gray-200 rounded-md">
+                    <div className="p-4 border-b"><h2 className="text-base font-medium">VPC Networking</h2></div>
+                    <div className="p-4 space-y-4">
+                        <label className="flex items-center">
+                            <input type="checkbox" checked={useVpc} onChange={e => setUseVpc(e.target.checked)} className="form-checkbox" />
+                            <span className="ml-2 text-sm text-gray-700">Connect to VPC for faster model loading</span>
+                        </label>
+                        
+                        {useVpc && (
+                            isLoadingSubnets ? <p className="text-sm text-gray-500">Loading subnets...</p> :
+                            subnets.length > 0 ? (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Subnetwork</label>
+                                    <select value={selectedSubnet} onChange={e => setSelectedSubnet(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
+                                        {subnets.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                                    </select>
+                                    {!isSubnetPgaEnabled && (
+                                        <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-800 flex items-center justify-between">
+                                            <span>This subnet does not have Private Google Access enabled, which is required.</span>
+                                            <button onClick={handleEnablePga} className="px-2 py-1 text-xs font-medium text-white bg-red-600 rounded-md hover:bg-red-700">Enable</button>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <p className="text-sm text-gray-500">No VPC subnets found in {bucket.location}. VPC cannot be used.</p>
+                            )
+                        )}
                     </div>
                 </div>
 
