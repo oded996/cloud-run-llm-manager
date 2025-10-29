@@ -11,6 +11,43 @@ This document serves as a running changelog to track the progress of the Cloud R
 - **Be Specific but Concise:** Briefly describe each change. For bugs, include a short summary of the issue and the solution.
 - **Update Chronologically:** Always add the newest entries at the top of the file.
 
+## 2025-10-29 (Evening Session)
+
+### UI/UX Overhaul
+
+- **Redesigned Import & Deploy Views:**
+    - Completely refactored the "Import Model" and "Deploy Service" screens to use a dense, single-column layout, closely matching the modern Google Cloud console design.
+    - Replaced the multi-step wizards and card-based layouts with a streamlined, single-form experience.
+- **Improved Model Discovery:**
+    - Created a new configuration file (`suggested-models.ts`) with a curated list of 15+ popular and high-performance models.
+    - Replaced the basic suggestion links with a collapsible table of recommended models, showing descriptions, size, and target GPU.
+    - Added "Explore More" links that direct users to the Ollama and Hugging Face libraries.
+    - Made Ollama the default selection for new model imports.
+
+### Implemented Features
+
+- **Debounced Model Validation:**
+    - Implemented a 300ms debounce on the "Model ID" input field. The application now automatically validates the model's existence as the user types, providing instant feedback with status icons.
+- **VRAM & GPU Compatibility Checks:**
+    - The "Import Model" flow now automatically calculates the estimated vRAM required after a model is validated. It displays a list of all GPUs in the target region, marking each as compatible or not.
+    - If no GPUs in the region can support the model, a clear warning is shown, and the user must confirm their choice before downloading.
+    - A final VRAM check was added to the "Deploy Service" screen, which warns the user if they select a GPU that is too small for the model.
+
+### Bug Fixes & UX Improvements
+
+- **Standardized Lowercase Regions:** Enforced the use of lowercase region names across the entire application—in the backend APIs, frontend state, and UI display—to fix a class of casing-related bugs.
+- **Fixed Navigation State:** Resolved a bug where navigating to the "Models" or "Services" tabs would incorrectly show a detail view instead of the list. The view now correctly resets when the tab is clicked.
+- **Corrected Service Name Validation:** Fixed a bug where the check for duplicate service names was failing due to the region casing issue.
+- **Improved Import Flow:**
+    - The "Import Model" flow now requires the user to select a bucket *before* validating a model, preventing a confusing UI state.
+    - The bucket selection dropdown now shows the region for each bucket and no longer selects one by default.
+    - The "Suggested Models" table is now collapsible and automatically closes after a model is selected.
+- **Delayed Deployment Redirect:** Added a 5-second delay after a deployment is initiated before redirecting to the service detail page, giving the user time to read the confirmation message.
+
+### Rollbacks
+
+- **Removed GPU Quota Check:** The feature to check for available GPU quota was removed after repeated, unresolvable errors with the underlying Google Cloud client libraries.
+
 ## 2025-10-29
 
 ### Implemented Features

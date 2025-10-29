@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { SUPPORTED_REGIONS } from '@/app/config/regions';
 import { Project, Tooltip } from '../general/general.component';
 
+import { SUGGESTED_MODELS } from '@/app/config/suggested-models';
+
 // --- Interfaces ---
 interface Model {
   id: string;
@@ -194,6 +196,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     const [newBucketName, setNewBucketName] = useState(`${project.projectId}-llm-models`);
     const [newBucketRegion, setNewBucketRegion] = useState(SUPPORTED_REGIONS[0]?.name || '');
     const [bucketRegionError, setBucketRegionError] = useState<string | null>(null);
+    const [bucketSelectionWarning, setBucketSelectionWarning] = useState<string | null>(null);
 
     const [modelSource, setModelSource] = useState('ollama');
     const [modelId, setModelId] = useState('');
@@ -203,6 +206,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     const [validationError, setValidationError] = useState<string | null>(null);
     const [modelExists, setModelExists] = useState<boolean | null>(null);
     const [preflightInfo, setPreflightInfo] = useState<PreflightInfo | null>(null);
+    const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
 
     const [estimatedVram, setEstimatedVram] = useState<number | null>(null);
     const [recommendedGpus, setRecommendedGpus] = useState<string[]>([]);
@@ -252,6 +256,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     useEffect(() => {
         const selectedBucket = projectBuckets.find(b => b.name === targetBucket);
         if (selectedBucket) {
+            setBucketSelectionWarning(null); // Clear warning once a bucket is selected
             const regionConfig = SUPPORTED_REGIONS.find(r => r.name === selectedBucket.location.toLowerCase());
             if (!regionConfig || regionConfig.gpus.length === 0) {
                 setBucketRegionError(`The selected bucket is in ${selectedBucket.location.toLowerCase()}, which does not support GPUs. Please select a different bucket or create one in a supported region.`);
@@ -271,6 +276,12 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                 setStep(1); // Go back to the initial step if input is cleared
                 return;
             }
+
+            if (!targetBucket) {
+                setBucketSelectionWarning('Please select a target bucket before choosing a model.');
+                return;
+            }
+            setBucketSelectionWarning(null);
 
             setIsValidating(true);
             setValidationError(null);
@@ -294,7 +305,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                 const data = await response.json();
                 if (!response.ok) {
                     throw new Error(data.error || 'Model not found.');
-                }
+                } 
                 setModelExists(true);
                 setPreflightInfo(data);
 
@@ -556,6 +567,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                     {/* Model Source */}
                     <div className="border-b border-gray-200 pb-6">
                         <h2 className="text-base font-semibold text-gray-800 mb-4">Model Source</h2>
+                        {bucketSelectionWarning && <p className="text-yellow-600 text-sm mb-4">{bucketSelectionWarning}</p>}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                             <button
                                 type="button"
@@ -587,12 +599,6 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                                     </div>
                                 </div>
                                 {validationError && <p className="text-red-500 text-sm mt-1">{validationError}</p>}
-                                <div className="text-xs text-gray-500 mt-1">
-                                    Suggestions:
-                                    <button type="button" onClick={() => setModelId('gemma3:1b')} className="ml-2 text-blue-600 hover:underline">gemma3:1b</button>
-                                    <button type="button" onClick={() => setModelId('gemma3:4b')} className="ml-2 text-blue-600 hover:underline">gemma3:4b</button>
-                                    <button type="button" onClick={() => setModelId('gemma3:12b')} className="ml-2 text-blue-600 hover:underline">gemma3:12b</button>
-                                </div>
                             </div>
                         )}
 
@@ -609,17 +615,75 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                                         </div>
                                     </div>
                                     {validationError && <p className="text-red-500 text-sm mt-1">{validationError}</p>}
-                                    <div className="text-xs text-gray-500 mt-1">
-                                        Suggestions:
-                                        <button type="button" onClick={() => setModelId('google/gemma-3-1b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-1b-it</button>
-                                        <button type="button" onClick={() => setModelId('google/gemma-3-4b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-4b-it</button>
-                                        <button type="button" onClick={() => setModelId('google/gemma-3-12b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-12b-it</button>
-                                    </div>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700">Hugging Face Token (optional)</label>
                                     <input type="text" value={hfToken} onChange={e => setHfToken(e.target.value)} placeholder="hf_..." className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
                                     <p className="text-xs text-gray-500 mt-1">Required for gated models like Llama 3.</p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Suggested Models */}
+                    <div className="border-b border-gray-200 pb-6">
+                        <button onClick={() => setIsSuggestionsOpen(!isSuggestionsOpen)} className="w-full text-left">
+                            <h2 className="text-base font-semibold text-gray-800 mb-4 flex items-center">
+                                <svg className={`w-5 h-5 mr-2 transform transition-transform ${isSuggestionsOpen ? 'rotate-90' : ''}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                                </svg>
+                                Suggested Models
+                            </h2>
+                        </button>
+                        {isSuggestionsOpen && (
+                            <div>
+                                <div className="overflow-x-auto border border-gray-200 rounded-md">
+                                    <table className="w-full text-left text-sm">
+                                        <thead className="bg-gray-50">
+                                            <tr>
+                                                <th className="p-2 font-medium text-gray-600">Name</th>
+                                                <th className="p-2 font-medium text-gray-600">Size</th>
+                                                <th className="p-2 font-medium text-gray-600">Description</th>
+                                                <th className="p-2 font-medium text-gray-600">GPU</th>
+                                                <th className="p-2 font-medium text-gray-600"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {SUGGESTED_MODELS.map((model) => {
+                                                const idToUse = modelSource === 'ollama' ? model.ollamaId : model.hfId;
+                                                return (
+                                                    <tr key={model.name} className="border-b last:border-b-0 hover:bg-gray-50">
+                                                        <td className="p-2 font-medium text-gray-800">{model.name}</td>
+                                                        <td className="p-2 text-gray-700">{model.size}</td>
+                                                        <td className="p-2 text-gray-700">{model.description}</td>
+                                                        <td className="p-2 text-gray-700">{model.gpu}</td>
+                                                        <td className="p-2 text-right">
+                                                            <button 
+                                                                onClick={() => {
+                                                                    setModelId(idToUse || '');
+                                                                    setIsSuggestionsOpen(false);
+                                                                }}
+                                                                disabled={!idToUse}
+                                                                className="text-xs font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 px-2 py-1 disabled:bg-gray-300"
+                                                            >
+                                                                Use
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div className="text-sm mt-4">
+                                    <a 
+                                        href={modelSource === 'ollama' ? "https://ollama.com/library" : "https://huggingface.co/models?pipeline_tag=text-generation&sort=trending"} 
+                                        target="_blank" 
+                                        rel="noopener noreferrer"
+                                        className="text-blue-600 hover:underline"
+                                    >
+                                        Explore more {modelSource === 'ollama' ? 'Ollama' : 'Hugging Face'} models →
+                                    </a>
                                 </div>
                             </div>
                         )}
@@ -681,7 +745,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
 
                     <div className="flex justify-end pt-4">
                         {step === 3 && (
-                            <button onClick={handleDownloadConfirmation} disabled={isDownloading} className={`px-6 py-2 font-medium text-white rounded-md flex items-center ${recommendedGpus.length === 0 ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-blue-600 hover:bg-blue-700'} disabled:bg-gray-400`}>
+                            <button onClick={handleDownloadConfirmation} disabled={isDownloading || !targetBucket} className={`px-6 py-2 font-medium text-white rounded-md flex items-center ${recommendedGpus.length === 0 ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-blue-600 hover:bg-blue-700'} disabled:bg-gray-400`}>
                                 {isDownloading && <Spinner />}
                                 {recommendedGpus.length > 0 ? 'Start Download' : 'Continue Anyway'}
                             </button>
