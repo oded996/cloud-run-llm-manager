@@ -19,7 +19,7 @@ export async function GET(request: Request) {
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
     const authClient = await auth.getClient();
-    google.options({ auth: authClient });
+    google.options({ auth: authClient as any });
 
     const compute = google.compute('v1');
 

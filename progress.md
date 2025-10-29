@@ -11,6 +11,21 @@ This document serves as a running changelog to track the progress of the Cloud R
 - **Be Specific but Concise:** Briefly describe each change. For bugs, include a short summary of the issue and the solution.
 - **Update Chronologically:** Always add the newest entries at the top of the file.
 
+## 2025-10-28
+
+### Implemented Features
+
+- **VPC Networking in Deployment Flow:**
+    - Integrated VPC network selection directly into the "Deploy Service" view. This allows users to connect new services to a VPC, which can accelerate model loading from GCS.
+    - The UI now includes a "VPC Networking" card where users can enable VPC, select a subnet from a dynamically populated list, and enable "Private Google Access" with a single click if it's disabled.
+    - The deployment API (`/api/services/deploy`) was updated to accept the VPC configuration and apply the correct annotations to the Cloud Run service.
+
+### Bug Fixes
+
+- **Corrected GPU Configuration in Deployment API:**
+    - **Issue:** The deployment API was failing with a `400 Bad Request` error due to an invalid JSON payload for GPU configuration. The code was incorrectly attempting to use `hostPath` volumes and incorrect annotations (`run.googleapis.com/gpu-support`).
+    - **Solution:** Reverted the logic to the correct implementation, which uses the `nodeSelector` field in the Cloud Run v2 API to specify the GPU accelerator type (e.g., `nvidia-l4`). This resolved the deployment failures.
+
 ## 2025-10-27 (Evening Session)
 
 ### Performance Enhancements

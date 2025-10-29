@@ -36,11 +36,6 @@ Project: Cloud Run LLM Manager
 *   **Project Billing Check:**
     *   The backend will use the Cloud Billing API to check if billing is enabled for the selected project.
     *   The UI will display: "Billing Status: Enabled" or "Billing Status: Not Found/Disabled".
-*   **Networking Configuration:**
-    *   The UI will check if a Serverless VPC Access connector is configured for the project's region.
-    *   It will recommend setting one up for faster GCS access (Direct VPC).
-    *   It will provide a deep link to the VPC Network console to create a new connector.
-    *   It will allow the user to select an existing connector to be used as a default for all future LLM service deployments (setting the `--vpc-connector` flag).
 
 ### CUJ 2: "Models" Tab - Model Management & Preparation
 
@@ -114,6 +109,10 @@ This workflow begins when the user clicks the "Deploy" button for a Hugging Face
     *   **Container Port:** Defaults to `8000`.
     *   **Container Arguments:** Pre-filled with vLLM defaults (`--model`, `--tensor-parallel-size`, etc.).
     *   **Environment Variables:** Pre-filled with `HF_HUB_OFFLINE=1`.
+    *   **VPC Networking:** An optional card allowing the user to connect the service to a VPC for accelerated model loading from GCS.
+        *   A toggle to enable or disable the VPC connection (defaults to enabled).
+        *   A dropdown to select an available subnet in the service's region. It defaults to the `default` subnet if present.
+        *   If the selected subnet does not have "Private Google Access" enabled, a warning is shown with a one-click button to enable it.
 
 **Functionality 2: Deploy New Ollama Service**
 

@@ -413,7 +413,7 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
                       p-4 font-mono text-xs h-64
                       overflow-y-auto
                       bg-gray-900 text-white rounded-b-md
-                      whitespace-pre-wrap break-words
+                      whitespace-pre-wrap break-all
                     "
                   >
                     {logError && <p className="text-yellow-400">{logError}</p>}
