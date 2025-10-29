@@ -12,10 +12,17 @@ export default function Home() {
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [initialService, setInitialService] = useState<{ name: string, region: string } | null>(null);
+  const [viewKey, setViewKey] = useState(0);
+
+  const handleViewChange = (view: View) => {
+    setActiveView(view);
+    setViewKey(prevKey => prevKey + 1); // Increment key to force re-mount
+  };
 
   const handleSwitchToServices = (serviceName: string, region: string) => {
     setActiveView('services');
     setInitialService({ name: serviceName, region: region });
+    setViewKey(prevKey => prevKey + 1); // Also force re-mount here
   };
 
   return (
@@ -24,14 +31,14 @@ export default function Home() {
       <main className="flex flex-grow">
         <Sidebar
           activeView={activeView}
-          onViewChange={setActiveView}
+          onViewChange={handleViewChange}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!isSidebarCollapsed)}
         />
         <div className="flex-1">
           {activeView === 'general' && <General selectedProject={selectedProject} onProjectSelect={setSelectedProject} />}
-          {activeView === 'models' && <Models selectedProject={selectedProject} onSwitchToServices={handleSwitchToServices} />}
-          {activeView === 'services' && <Services selectedProject={selectedProject} initialService={initialService} />}
+          {activeView === 'models' && <Models key={viewKey} selectedProject={selectedProject} onSwitchToServices={handleSwitchToServices} />}
+          {activeView === 'services' && <Services key={viewKey} selectedProject={selectedProject} initialService={initialService} />}
         </div>
       </main>
     </div>

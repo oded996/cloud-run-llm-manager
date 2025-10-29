@@ -68,6 +68,11 @@ const Services = ({ selectedProject, initialService }: { selectedProject: Projec
   const cacheKey = selectedProject ? `llm_manager_services_cache_${selectedProject.projectId}` : null;
 
   useEffect(() => {
+    // When the project changes, always reset to the list view.
+    setSelectedService(null);
+  }, [selectedProject]);
+
+  useEffect(() => {
     if (initialService && selectedProject) {
       // Construct a partial service object to immediately show the detail view
       const partialService = {

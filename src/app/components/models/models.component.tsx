@@ -1042,17 +1042,14 @@ const RefreshIcon = ({ isRefreshing }: { isRefreshing: boolean }) => (
 
 const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick, onDeployClick, isRefreshing, onRefresh }: { selectedProject: Project | null, buckets: Bucket[], isLoading: boolean, error: string | null, onImportClick: () => void, onDeployClick: (model: Model, bucket: Bucket) => void, isRefreshing: boolean, onRefresh: () => void }) => {
 
-  const getGpuRecommendations = (modelSize: number, region: string) => {
-    const estimatedVramGb = (modelSize / (1024 * 1024 * 1024)) * 1.2; // size in bytes to GB + 20% overhead
-    const regionConfig = SUPPORTED_REGIONS.find(r => r.name === region);
-    if (!regionConfig) return { estimatedVramGb, recommendations: [] };
-
-    const recommendations = regionConfig.gpus
-      .filter(gpu => gpu.vram_gb >= estimatedVramGb)
-      .map(gpu => gpu.name);
-      
-    return { estimatedVramGb, recommendations };
-  };
+  const allModels = buckets.flatMap(bucket => 
+    bucket.models.map(model => ({
+      ...model,
+      bucketName: bucket.name,
+      bucketLocation: bucket.location,
+      originalBucket: bucket, // Keep a reference to the original bucket object
+    }))
+  );
 
   return (
     <div className="p-6">
@@ -1079,79 +1076,68 @@ const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick,
         </button>
       </div>
 
-      {isLoading && <p>Loading buckets...</p>}
+      {isLoading && <p>Loading models...</p>}
       {error && <p className="text-red-500">{error}</p>}
-      {!isLoading && !error && buckets.length === 0 && (
+      
+      {!isLoading && !error && allModels.length === 0 && (
         <div className="text-center py-12">
-            <h3 className="text-lg font-medium text-gray-900">No Model Buckets Found</h3>
+            <h3 className="text-lg font-medium text-gray-900">No Models Found</h3>
             <p className="mt-1 text-sm text-gray-500">Get started by importing a new model.</p>
         </div>
       )}
 
-      <div className="space-y-6">
-        {buckets.map((bucket) => (
-          <div key={bucket.name} className="bg-white border border-gray-200 rounded-md">
-            <div className="p-4 border-b border-gray-200">
-                <h2 className="text-base font-medium text-gray-800">{bucket.name}</h2>
-                <p className="text-sm text-gray-500">{bucket.location}</p>
-            </div>
-            <div className="p-4">
-              {bucket.models.length > 0 ? (
-                <ul className="divide-y divide-gray-200">
-                  {bucket.models.map(model => {
-                    const { estimatedVramGb, recommendations } = model.size ? getGpuRecommendations(model.size, bucket.location.toLowerCase()) : { estimatedVramGb: 0, recommendations: [] };
-                    return (
-                      <li key={model.id} className="py-4">
-                        <div className="flex justify-between items-center mb-2">
-                            <div>
-                                <p className="font-medium text-gray-800">{model.id}</p>
-                                <p className="text-sm text-gray-600">Source: {model.source}</p>
-                            </div>
-                            <div className="flex items-center space-x-4">
-                                {model.status === 'completed' && (
-                                  <button 
-                                    onClick={() => onDeployClick(model, bucket)}
-                                    className="text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 px-3 py-1"
-                                  >
-                                    Deploy
-                                  </button>
-                                )}
-                                <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${model.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                                    {model.status}
-                                </span>
-                            </div>
-                        </div>
-                        {model.size ? (
-                          <div className="text-xs text-gray-600 grid grid-cols-3 gap-4 mt-2">
-                            <div>
-                              <p className="font-medium">Model Size</p>
-                              <p>{formatBytes(model.size)}</p>
-                            </div>
-                            <div>
-                              <p className="font-medium">Est. vRAM Required</p>
-                              <p>~{estimatedVramGb.toFixed(2)} GB</p>
-                            </div>
-                            <div>
-                              <p className="font-medium">Recommended GPUs</p>
-                              <p>{recommendations.join(', ') || 'N/A'}</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-xs text-gray-500 mt-2">
-                            Size information not available for this model.
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                <p className="text-sm text-gray-500">No models found in this bucket.</p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+      {!isLoading && !error && allModels.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="p-3 font-medium text-gray-600">Model ID</th>
+                <th className="p-3 font-medium text-gray-600">Source</th>
+                <th className="p-3 font-medium text-gray-600">Bucket</th>
+                <th className="p-3 font-medium text-gray-600">Region</th>
+                <th className="p-3 font-medium text-gray-600">Size</th>
+                <th className="p-3 font-medium text-gray-600">Est. vRAM</th>
+                <th className="p-3 font-medium text-gray-600">Recommended GPUs</th>
+                <th className="p-3 font-medium text-gray-600"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {allModels.map((model) => {
+                const regionConfig = SUPPORTED_REGIONS.find(r => r.name === model.bucketLocation.toLowerCase());
+                const estimatedVramGb = model.size ? (model.size / (1024 * 1024 * 1024)) * 1.2 : 0;
+                const recommendations = regionConfig && model.size
+                  ? regionConfig.gpus
+                      .filter(gpu => gpu.vram_gb >= estimatedVramGb)
+                      .map(gpu => gpu.name)
+                      .join(', ')
+                  : null;
+
+                return (
+                  <tr key={`${model.bucketName}-${model.id}`} className="border-b border-gray-200 last:border-b-0 hover:bg-gray-50">
+                    <td className="p-3 font-medium text-gray-800">{model.id}</td>
+                    <td className="p-3 text-gray-800">{model.source}</td>
+                    <td className="p-3 text-gray-800">{model.bucketName}</td>
+                    <td className="p-3 text-gray-800">{model.bucketLocation.toLowerCase()}</td>
+                    <td className="p-3 text-gray-800">{model.size ? formatBytes(model.size) : 'N/A'}</td>
+                    <td className="p-3 text-gray-800">{estimatedVramGb > 0 ? `~${estimatedVramGb.toFixed(2)} GB` : 'N/A'}</td>
+                    <td className="p-3 text-gray-800">{recommendations || 'N/A'}</td>
+                    <td className="p-3 text-right">
+                      {model.status === 'completed' && (
+                        <button 
+                          onClick={() => onDeployClick(model, model.originalBucket)}
+                          className="text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 px-3 py-1"
+                        >
+                          Deploy
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 };
