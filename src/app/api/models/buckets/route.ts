@@ -32,7 +32,7 @@ export async function GET(request: Request) {
             const [bucketMetadata] = await bucket.getMetadata();
             return {
               name: bucket.name,
-              location: bucketMetadata.location.toLowerCase(),
+              location: (bucketMetadata.location || '').toLowerCase(),
               models: metadata.models || [],
             };
           } catch (e) {

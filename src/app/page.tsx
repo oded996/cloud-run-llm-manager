@@ -16,6 +16,7 @@ export default function Home() {
 
   const handleViewChange = (view: View) => {
     setActiveView(view);
+    setInitialService(null); // Clear initial service when changing views
     setViewKey(prevKey => prevKey + 1); // Increment key to force re-mount
   };
 
@@ -38,7 +39,7 @@ export default function Home() {
         <div className="flex-1">
           {activeView === 'general' && <General selectedProject={selectedProject} onProjectSelect={setSelectedProject} />}
           {activeView === 'models' && <Models key={viewKey} selectedProject={selectedProject} onSwitchToServices={handleSwitchToServices} />}
-          {activeView === 'services' && <Services key={viewKey} selectedProject={selectedProject} initialService={initialService} />}
+          {activeView === 'services' && <Services key={viewKey} selectedProject={selectedProject} initialService={initialService} onSwitchToServices={handleSwitchToServices} />}
         </div>
       </main>
     </div>

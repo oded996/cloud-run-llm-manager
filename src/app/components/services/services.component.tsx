@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Project, Tooltip } from '../general/general.component';
 import { PermissionsCard } from './permissions.component';
 import { ChatCard } from './chat.component';
+import { DeployServiceView } from '../models/models.component';
 
 // --- Interfaces ---
 interface Service {
@@ -16,12 +17,17 @@ interface Service {
   latestCreatedRevision: string;
   latestReadyRevision: string;
   template: {
+    annotations?: { [key: string]: string };
+    scaling?: { minInstanceCount?: number; maxInstanceCount?: number };
+    vpcAccess?: { networkInterfaces?: { subnetwork: string }[], egress?: string };
+    timeout?: string | { seconds: number };
     nodeSelector?: {
       accelerator?: string;
     };
     containers: {
       image: string;
       args?: string[];
+      env?: { name: string; value: string }[];
       ports?: {
         containerPort?: number;
       }[];
@@ -31,7 +37,9 @@ interface Service {
           memory?: string;
         };
       };
+      volumeMounts?: { name: string; mountPath: string }[];
     }[];
+    volumes?: { name: string; gcs: { bucket: string } }[];
   };
   terminalCondition: {
     type: string;
@@ -58,36 +66,28 @@ const RefreshIcon = ({ isRefreshing }: { isRefreshing: boolean }) => (
     </svg>
 );
 
-const Services = ({ selectedProject, initialService }: { selectedProject: Project | null, initialService: { name: string, region: string } | null }) => {
+const Services = ({ selectedProject, initialService, onSwitchToServices }: { selectedProject: Project | null, initialService: { name: string, region: string } | null, onSwitchToServices: (serviceName: string, region: string) => void }) => {
   const [services, setServices] = useState<Service[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedService, setSelectedService] = useState<Service | null>(null);
+  const [editingService, setEditingService] = useState<Service | null>(null);
 
   const cacheKey = selectedProject ? `llm_manager_services_cache_${selectedProject.projectId}` : null;
 
   useEffect(() => {
-    // When the project changes, always reset to the list view.
     setSelectedService(null);
+    setEditingService(null);
   }, [selectedProject]);
 
   useEffect(() => {
     if (initialService && selectedProject) {
-      // Construct a partial service object to immediately show the detail view
       const partialService = {
         name: `projects/${selectedProject.projectId}/locations/${initialService.region}/services/${initialService.name}`,
-        // Dummy values for other required fields, they will be updated by the fetch inside ServiceDetailView
-        uid: '',
-        uri: '',
-        reconciling: true, // Assume it's deploying
-        updateTime: new Date().toISOString(),
-        lastModifier: '',
-        latestCreatedRevision: '',
-        latestReadyRevision: ' ', // Important: make these different to trigger 'Deploying' state
-        template: { containers: [] },
-        terminalCondition: { type: '', state: '' },
-        conditions: [],
+        uid: '', uri: '', reconciling: true, updateTime: new Date().toISOString(), lastModifier: '',
+        latestCreatedRevision: '', latestReadyRevision: ' ',
+        template: { containers: [] }, terminalCondition: { type: '', state: '' }, conditions: [],
       };
       setSelectedService(partialService);
     }
@@ -98,19 +98,13 @@ const Services = ({ selectedProject, initialService }: { selectedProject: Projec
         setIsLoading(false);
         return;
     }
-    
     setIsRefreshing(true);
     setError(null);
-
     try {
         const response = await fetch(`/api/services/list?projectId=${selectedProject.projectId}`);
-        if (!response.ok) {
-            throw new Error('Failed to fetch services.');
-        }
+        if (!response.ok) throw new Error('Failed to fetch services.');
         const data = await response.json();
-        
-        const cachedData = localStorage.getItem(cacheKey);
-        if (JSON.stringify(data) !== cachedData) {
+        if (JSON.stringify(data) !== localStorage.getItem(cacheKey)) {
             setServices(data);
             localStorage.setItem(cacheKey, JSON.stringify(data));
         }
@@ -127,20 +121,31 @@ const Services = ({ selectedProject, initialService }: { selectedProject: Projec
       setIsLoading(false);
       return;
     }
-
     const cachedData = localStorage.getItem(cacheKey);
     if (cachedData) {
         setServices(JSON.parse(cachedData));
         setIsLoading(false);
     } else {
-        setIsLoading(true); // Only show loader if no cache exists
+        setIsLoading(true);
     }
-
     fetchServices();
   }, [selectedProject, cacheKey, fetchServices]);
 
+  if (editingService) {
+    return (
+        <DeployServiceView
+            project={selectedProject!}
+            model={{ id: '', source: 'huggingface', status: 'completed', downloadedAt: '', size: 0 }} // Dummy model
+            bucket={{ name: '', location: '', models: [] }} // Dummy bucket
+            onClose={() => setEditingService(null)}
+            onDeploymentStart={onSwitchToServices}
+            existingService={editingService}
+        />
+    );
+  }
+
   if (selectedService) {
-    return <ServiceDetailView project={selectedProject!} initialService={selectedService} onBack={() => setSelectedService(null)} />;
+    return <ServiceDetailView project={selectedProject!} initialService={selectedService} onBack={() => setSelectedService(null)} onEdit={setEditingService} />;
   }
 
   return (
@@ -149,11 +154,7 @@ const Services = ({ selectedProject, initialService }: { selectedProject: Projec
         <div className="flex items-center space-x-2">
             <h1 className="text-xl font-medium text-gray-800">Services</h1>
             <Tooltip text="Refresh services list">
-                <button
-                    onClick={() => fetchServices()}
-                    disabled={isRefreshing || !selectedProject}
-                    className="p-1 rounded-full text-gray-500 hover:bg-gray-100 disabled:text-gray-300 disabled:hover:bg-transparent"
-                >
+                <button onClick={() => fetchServices()} disabled={isRefreshing || !selectedProject} className="p-1 rounded-full text-gray-500 hover:bg-gray-100 disabled:text-gray-300">
                     <RefreshIcon isRefreshing={isRefreshing} />
                 </button>
             </Tooltip>
@@ -186,19 +187,12 @@ const Services = ({ selectedProject, initialService }: { selectedProject: Projec
               {services.map((service) => {
                 const region = service.name.split('/')[3];
                 const serviceName = service.name.split('/')[5];
-                
-                const getStatus = (service: Service) => {
-                  if (service.reconciling || service.latestCreatedRevision !== service.latestReadyRevision) {
-                    return 'Deploying';
-                  }
-                  const readyCondition = service.terminalCondition;
-                  if (readyCondition?.type === 'Ready' && readyCondition?.state === 'CONDITION_SUCCEEDED') {
-                    return 'Running';
-                  }
+                const getStatus = (svc: Service) => {
+                  if (svc.reconciling || svc.latestCreatedRevision !== svc.latestReadyRevision) return 'Deploying';
+                  if (svc.terminalCondition?.type === 'Ready' && svc.terminalCondition?.state === 'CONDITION_SUCCEEDED') return 'Running';
                   return 'Error';
                 }
                 const status = getStatus(service);
-
                 return (
                   <tr key={service.uid} className="border-b border-gray-200 last:border-b-0 hover:bg-gray-50">
                     <td className="p-3">
@@ -208,9 +202,7 @@ const Services = ({ selectedProject, initialService }: { selectedProject: Projec
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
                         status === 'Running' ? 'bg-green-100 text-green-800' : 
                         status === 'Deploying' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
-                      }`}>
-                        {status}
-                      </span>
+                      }`}>{status}</span>
                     </td>
                     <td className="p-3 text-gray-800">{region}</td>
                     <td className="p-3 text-gray-800">{new Date(service.updateTime).toLocaleString()}</td>
@@ -226,11 +218,14 @@ const Services = ({ selectedProject, initialService }: { selectedProject: Projec
   );
 };
 
-const ServiceDetailView = ({ project, initialService, onBack }: { project: Project, initialService: Service, onBack: () => void }) => {
+const ServiceDetailView = ({ project, initialService, onBack, onEdit }: { project: Project, initialService: Service, onBack: () => void, onEdit: (service: Service) => void }) => {
+    type Tab = 'details' | 'logs' | 'permissions' | 'chat';
+    const [activeTab, setActiveTab] = useState<Tab>('details');
+
     const [service, setService] = useState<Service>(initialService);
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [isConfigOpen, setIsConfigOpen] = useState(false);
+    
     const [logs, setLogs] = useState<any[]>([]);
     const [logError, setLogError] = useState<string | null>(null);
     const [isLogsRefreshing, setIsLogsRefreshing] = useState(false);
@@ -241,133 +236,143 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
     const serviceName = initialService.name.split('/')[5];
 
     const getStatus = (service: Service) => {
-        if (service.reconciling || service.latestCreatedRevision !== service.latestReadyRevision) {
-            return 'Deploying';
-        }
+        if (service.reconciling || service.latestCreatedRevision !== service.latestReadyRevision) return 'Deploying';
         const readyCondition = service.terminalCondition;
-        if (readyCondition?.type === 'Ready' && readyCondition?.state === 'CONDITION_SUCCEEDED') {
-            return 'Running';
-        }
+        if (readyCondition?.type === 'Ready' && readyCondition?.state === 'CONDITION_SUCCEEDED') return 'Running';
         return 'Error';
     };
-
     const status = getStatus(service);
 
-    useEffect(() => {
-        const fetchService = async () => {
-            setIsLoading(true);
-            try {
-                const response = await fetch(`/api/services/detail?projectId=${project.projectId}&region=${region}&serviceName=${serviceName}`);
-                if (!response.ok) throw new Error('Failed to fetch service details.');
-                const data = await response.json();
-                setService(data);
-            } catch (err: any) {
-                setError(err.message);
-            } finally {
-                setIsLoading(false);
-            }
-        };
+    const fetchServiceDetails = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const response = await fetch(`/api/services/detail?projectId=${project.projectId}&region=${region}&serviceName=${serviceName}`);
+            if (!response.ok) throw new Error('Failed to fetch service details.');
+            const data = await response.json();
+            console.log('Raw Service Config:', JSON.stringify(data, null, 2));
+            setService(data);
+        } catch (err: any) {
+            setError(err.message);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [project.projectId, region, serviceName]);
 
+    useEffect(() => {
+        fetchServiceDetails();
         if (status === 'Deploying') {
-            const interval = setInterval(fetchService, 5000); // Poll every 5 seconds
+            const interval = setInterval(fetchServiceDetails, 5000);
             return () => clearInterval(interval);
         }
-    }, [project.projectId, region, serviceName, status]);
+    }, [status, fetchServiceDetails]);
 
-    const pollIntervalRef = useRef<number>(15000); // Start with a 15-second interval
+    const pollIntervalRef = useRef<number>(1500);
     const pollTimeoutId = useRef<NodeJS.Timeout | null>(null);
 
+    useEffect(() => {
+        if (activeTab === 'logs' && logContainerRef.current) {
+            setTimeout(() => {
+                if (logContainerRef.current) {
+                    logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+                }
+            }, 0);
+        }
+    }, [activeTab]);
+
     const fetchLogs = useCallback(async () => {
-        // Clear any existing timeout before starting a new fetch
         if (pollTimeoutId.current) clearTimeout(pollTimeoutId.current);
         setIsLogsRefreshing(true);
-
         try {
             let url = `/api/services/logs?projectId=${project.projectId}&region=${region}&serviceName=${serviceName}`;
-            if (lastLogTimestamp.current) {
-                url += `&since=${lastLogTimestamp.current}`;
-            }
-
+            if (lastLogTimestamp.current) url += `&since=${lastLogTimestamp.current}`;
             const response = await fetch(url);
             if (!response.ok) {
                 const errorData = await response.json();
                 throw new Error(errorData.error || 'Failed to fetch logs.');
             }
-
-            // If successful, reset the poll interval to the base value
-            pollIntervalRef.current = 15000;
-            setLogError(null); // Clear previous errors
-
+            pollIntervalRef.current = 1500; // Poll every 1.5 seconds when the tab is active
+            setLogError(null);
             const newLogs = await response.json();
-
             if (newLogs.length > 0) {
                 const logContainer = logContainerRef.current;
                 const shouldScroll = logContainer ? (logContainer.scrollTop + logContainer.clientHeight) >= logContainer.scrollHeight - 20 : false;
-                
                 const lastLog = newLogs[newLogs.length - 1];
-                if (lastLog && lastLog.timestamp && typeof lastLog.timestamp.seconds === 'number') {
-                    const lastTimestampISO = new Date(lastLog.timestamp.seconds * 1000 + (lastLog.timestamp.nanos || 0) / 1000000).toJSON();
-                    if (lastTimestampISO) {
-                        lastLogTimestamp.current = lastTimestampISO;
-                    }
+                if (lastLog?.timestamp?.seconds) {
+                    lastLogTimestamp.current = new Date(lastLog.timestamp.seconds * 1000 + (lastLog.timestamp.nanos || 0) / 1e6).toJSON();
                 }
-
-                setLogs(prevLogs => {
-                    const updatedLogs = [...prevLogs, ...newLogs];
-                    if (updatedLogs.length > 3000) {
-                        return updatedLogs.slice(updatedLogs.length - 3000);
-                    }
-                    return updatedLogs;
-                });
-
+                setLogs(prev => [...prev, ...newLogs].slice(-3000));
                 if (shouldScroll && logContainer) {
-                    setTimeout(() => {
-                        logContainer.scrollTop = logContainer.scrollHeight;
-                    }, 100);
+                    setTimeout(() => { logContainer.scrollTop = logContainer.scrollHeight; }, 100);
                 }
             }
         } catch (err: any) {
-            console.error("Log fetch error:", err.message);
-            
             let userMessage = `Could not fetch new logs: ${err.message}.`;
-            // Provide a more user-friendly message for quota errors.
-            if (err.message && err.message.includes('RESOURCE_EXHAUSTED')) {
-                userMessage = 'Log quota limit reached. Polling less frequently.';
-            }
-            
+            if (err.message?.includes('RESOURCE_EXHAUSTED')) userMessage = 'Log quota limit reached. Polling less frequently.';
             setLogError(`${userMessage} Retrying...`);
-            
-            // Implement exponential backoff
-            pollIntervalRef.current = Math.min(pollIntervalRef.current * 2, 60000); // Double interval, max 60s
+            pollIntervalRef.current = Math.min(pollIntervalRef.current * 2, 60000);
         } finally {
-            // Schedule the next poll
             pollTimeoutId.current = setTimeout(fetchLogs, pollIntervalRef.current);
             setIsLogsRefreshing(false);
         }
     }, [project.projectId, region, serviceName]);
 
     useEffect(() => {
-        // Start the polling
-        fetchLogs();
-
-        // Cleanup on component unmount
-        return () => {
-            if (pollTimeoutId.current) {
-                clearTimeout(pollTimeoutId.current);
+        if (activeTab === 'logs') {
+            if (!lastLogTimestamp.current) {
+                const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toJSON();
+                lastLogTimestamp.current = twoMinutesAgo;
             }
-        };
-    }, [fetchLogs]);
+            fetchLogs();
+            return () => {
+                if (pollTimeoutId.current) clearTimeout(pollTimeoutId.current);
+            };
+        }
+    }, [activeTab, fetchLogs]);
 
     const consoleUrl = `https://console.cloud.google.com/run/detail/${region}/${serviceName}/revisions?project=${project.projectId}`;
-    const modelArg = service.template.containers[0]?.args?.find(arg => arg.startsWith('--model='));
-    const deployedModel = modelArg ? modelArg.split('/').pop() : 'Unknown';
     const container = service.template.containers[0];
-    const resources = container?.resources?.limits;
     const modelSource = container?.image?.includes('ollama') ? 'ollama' : 'huggingface';
 
+    const renderTabContent = () => {
+        switch (activeTab) {
+            case 'details':
+                return <ServiceDetailsTab service={service} />;
+            case 'logs':
+                return (
+                    <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
+                        <div className="p-4 border-b flex justify-between items-center">
+                            <h2 className="text-base font-medium">Live Logs</h2>
+                            <button onClick={() => fetchLogs()} disabled={isLogsRefreshing} className="p-1 rounded-full text-gray-500 hover:bg-gray-100 disabled:text-gray-300" title="Refresh logs">
+                                <RefreshIcon isRefreshing={isLogsRefreshing} />
+                            </button>
+                        </div>
+                        <div ref={logContainerRef} className="p-4 font-mono text-xs h-96 overflow-y-auto bg-gray-900 text-white rounded-b-md whitespace-pre-wrap break-all">
+                            {logError && <p className="text-yellow-400">{logError}</p>}
+                            {logs.map((log, i) => (
+                                <p key={i}>
+                                    <span className="text-gray-400">
+                                        {new Date((log.timestamp?.seconds || 0) * 1000 + (log.timestamp?.nanos || 0) / 1e6).toLocaleString()}
+                                    </span>: {typeof log.message === "object" ? JSON.stringify(log.message) : log.message}
+                                </p>
+                            ))}
+                        </div>
+                    </div>
+                );
+            case 'permissions':
+                return <PermissionsCard project={project} region={region} serviceName={serviceName} />;
+            case 'chat':
+                if (status === 'Running' && service.uri) {
+                    return <ChatCard serviceUrl={service.uri} modelSource={modelSource} />;
+                }
+                return <p className="text-center text-gray-500 py-8">Service must be running to use the chat.</p>;
+            default:
+                return null;
+        }
+    };
+
     return (
-        <div className="p-6">
-            <div className="flex justify-between items-center pb-4 border-b border-gray-200 mb-6">
+        <div className="p-6 bg-gray-50 flex-grow">
+            <div className="flex justify-between items-center pb-4 mb-4">
                 <div>
                     <button onClick={onBack} className="text-sm font-medium text-blue-600 hover:underline mb-2">← Back to Services</button>
                     <div className="flex items-center">
@@ -375,84 +380,90 @@ const ServiceDetailView = ({ project, initialService, onBack }: { project: Proje
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
                             status === 'Running' ? 'bg-green-100 text-green-800' : 
                             status === 'Deploying' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
-                        }`}>
-                            {status}
-                        </span>
+                        }`}>{status}</span>
                     </div>
                 </div>
-                <a href={consoleUrl} target="_blank" rel="noopener noreferrer" className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700">
-                    Manage in Cloud Run
-                </a>
+                <div className="flex items-center space-x-2">
+                    <button onClick={() => onEdit(service)} className="bg-white text-gray-700 px-4 py-2 rounded-md text-sm font-medium border border-gray-300 hover:bg-gray-50">
+                        Edit
+                    </button>
+                    <a href={consoleUrl} target="_blank" rel="noopener noreferrer" className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700">
+                        Manage in Cloud Run
+                    </a>
+                </div>
             </div>
 
-            <div className="space-y-6">
-                <div className="bg-white border border-gray-200 rounded-md">
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">Details</h2></div>
-                    <div className="p-4 grid grid-cols-2 gap-4 text-sm">
-                        <div><p className="font-medium text-gray-600">Endpoint URL</p><a href={service.uri} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-mono">{service.uri}</a></div>
-                        <div><p className="font-medium text-gray-600">Deployed Model</p><p>{deployedModel}</p></div>
-                        <div><p className="font-medium text-gray-600">Region</p><p>{region}</p></div>
-                        <div><p className="font-medium text-gray-600">Last Updated</p><p>{new Date(service.updateTime).toLocaleString()}</p></div>
-                    </div>
-                </div>
-
-                {project && <PermissionsCard project={project} region={region} serviceName={serviceName} />}
-
-                <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
-                  <div className="p-4 border-b flex justify-between items-center">
-                    <div className="flex items-center space-x-2">
-                        <h2 className="text-base font-medium">Live Logs</h2>
+            <div className="border-b border-gray-200">
+                <nav className="-mb-px flex space-x-6">
+                    {(['details', 'logs', 'permissions', 'chat'] as Tab[]).map(tab => (
                         <button
-                            onClick={() => fetchLogs()}
-                            disabled={isLogsRefreshing}
-                            className="p-1 rounded-full text-gray-500 hover:bg-gray-100 disabled:text-gray-300 disabled:hover:bg-transparent"
-                            title="Refresh logs"
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            className={`capitalize py-3 px-1 border-b-2 font-medium text-sm ${
+                                activeTab === tab
+                                ? 'border-blue-600 text-blue-600'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                            }`}
                         >
-                            <RefreshIcon isRefreshing={isLogsRefreshing} />
+                            {tab === 'details' ? 'Details' : tab}
                         </button>
-                    </div>
-                  </div>
-                  <div
-                    ref={logContainerRef}
-                    className="
-                      p-4 font-mono text-xs h-64
-                      overflow-y-auto
-                      bg-gray-900 text-white rounded-b-md
-                      whitespace-pre-wrap break-all
-                    "
-                  >
-                    {logError && <p className="text-yellow-400">{logError}</p>}
-                    {logs.map((log, i) => (
-                      <p key={i}>
-                        <span className="text-gray-400">
-                          {(() => {
-                            const ts = log.timestamp;
-                            if (ts && typeof ts.seconds === "number") {
-                              return new Date(
-                                ts.seconds * 1000 + (ts.nanos || 0) / 1000000
-                              ).toLocaleString();
-                            }
-                            if (ts && !isNaN(new Date(ts).getTime())) {
-                              return new Date(ts).toLocaleString();
-                            }
-                            return "No timestamp";
-                          })()}
-                        </span>
-                        :{" "}
-                        {typeof log.message === "object"
-                          ? JSON.stringify(log.message)
-                          : log.message}
-                      </p>
                     ))}
-                  </div>
-</div>
+                </nav>
+            </div>
 
-                {status === 'Running' && service.uri && <ChatCard serviceUrl={service.uri} modelSource={modelSource} />}
+            <div className="mt-6">
+                {isLoading && activeTab === 'details' ? <p>Loading details...</p> : error ? <p className="text-red-500">{error}</p> : renderTabContent()}
             </div>
         </div>
     );
-    
-
 };
+
+const ServiceDetailsTab = ({ service }: { service: Service }) => {
+    const container = service.template.containers[0];
+    if (!container) return <p>No container information available.</p>;
+
+    const subnetwork = service.template.vpcAccess?.networkInterfaces?.[0]?.subnetwork || 'Not connected';
+
+    const gcsVolume = service.template.volumes?.find(v => v.gcs);
+    const gcsMount = gcsVolume ? container.volumeMounts?.find(vm => vm.name === gcsVolume.name) : null;
+    const bucketName = gcsVolume?.gcs?.bucket || null;
+    const mountPath = gcsMount?.mountPath || null;
+
+    const DetailItem = ({ label, children }: { label: string, children: React.ReactNode }) => (
+        <div className="py-3 sm:grid sm:grid-cols-3 sm:gap-4">
+            <dt className="text-sm font-medium text-gray-600">{label}</dt>
+            <dd className="mt-1 text-sm text-gray-800 sm:mt-0 sm:col-span-2">{children}</dd>
+        </div>
+    );
+
+    return (
+        <div className="bg-white border border-gray-200 rounded-md">
+            <div className="p-4 border-b"><h2 className="text-base font-medium">Configuration</h2></div>
+            <div className="p-4">
+                <dl className="divide-y divide-gray-200">
+                    <DetailItem label="Endpoint URL"><a href={service.uri} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-mono">{service.uri}</a></DetailItem>
+                    <DetailItem label="Service Name">{service.name.split('/')[5]}</DetailItem>
+                    <DetailItem label="Region">{service.name.split('/')[3]}</DetailItem>
+                    <DetailItem label="Last Updated">{new Date(service.updateTime).toLocaleString()}</DetailItem>
+                    <DetailItem label="Container Image">{container.image}</DetailItem>
+                    <DetailItem label="GPU">{service.template.nodeSelector?.accelerator || 'Not specified'}</DetailItem>
+                    <DetailItem label="vCPUs">{container.resources?.limits?.cpu || 'Not specified'}</DetailItem>
+                    <DetailItem label="Memory">{container.resources?.limits?.memory || 'Not specified'}</DetailItem>
+                    <DetailItem label="VPC Subnetwork">{subnetwork}</DetailItem>
+                    <DetailItem label="GCS Mount">{bucketName && mountPath ? `${bucketName} → ${mountPath}` : 'Not mounted'}</DetailItem>
+                    <DetailItem label="Arguments">
+                        <pre className="font-mono text-xs bg-gray-100 p-2 rounded">{container.args?.join('\n') || 'None'}</pre>
+                    </DetailItem>
+                    <DetailItem label="Environment Variables">
+                        <pre className="font-mono text-xs bg-gray-100 p-2 rounded">
+                            {container.env?.map(e => `${e.name}=${e.value}`).join('\n') || 'None'}
+                        </pre>
+                    </DetailItem>
+                </dl>
+            </div>
+        </div>
+    );
+};
+
 
 export default Services;

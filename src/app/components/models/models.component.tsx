@@ -757,9 +757,101 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     );
 };
 
-const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart }: { project: Project, model: Model, bucket: Bucket, onClose: () => void, onDeploymentStart: (serviceName: string, region: string) => void }) => {
+// ... (other interfaces)
+
+interface Service {
+  name: string;
+  uid: string;
+  uri: string;
+  reconciling: boolean;
+  updateTime: string;
+  lastModifier: string;
+  latestCreatedRevision: string;
+  latestReadyRevision: string;
+  labels?: { [key: string]: string };
+  template: {
+    annotations?: { [key: string]: string };
+    scaling?: { minInstanceCount?: number; maxInstanceCount?: number };
+    vpcAccess?: { networkInterfaces?: { subnetwork: string }[], egress?: string };
+    timeout?: string | { seconds: number };
+    nodeSelector?: {
+      accelerator?: string;
+    };
+    containers: {
+      image: string;
+      args?: string[];
+      env?: { name: string; value: string }[];
+      ports?: {
+        containerPort?: number;
+      }[];
+      resources?: {
+        limits?: {
+          cpu?: string;
+          memory?: string;
+        };
+      };
+    }[];
+  };
+  terminalCondition: {
+    type: string;
+    state: string;
+    message?: string;
+  };
+  conditions: {
+    type: string;
+    state: string;
+    message?: string;
+  }[];
+}
+
+export const DeployServiceView = ({ project, model: initialModel, bucket: initialBucket, onClose, onDeploymentStart, existingService }: { project: Project, model: Model, bucket: Bucket, onClose: () => void, onDeploymentStart: (serviceName: string, region: string) => void, existingService?: Service | null }) => {
+
+    const isEditMode = !!existingService;
+
+
+
+    // In edit mode, derive model and bucket from the service object.
+
+    // In create mode, use the props.
+
+        const model = isEditMode 
+
+            ? {
+
+                id: existingService.template.containers[0]?.args?.find(a => a.startsWith('--model='))?.split('=').slice(1).join('=').split('/').slice(3).join('/') || 
+
+                    existingService.template.containers[0]?.env?.find(e => e.name === 'MODEL')?.value || '',
+
+                source: existingService.template.containers[0]?.image?.includes('ollama') ? 'ollama' : 'huggingface',
+
+                size: 0, // Size is not critical for edit mode, default to 0
+
+              } as Model
+
+            : initialModel;
+
+    
+
+        const bucket = isEditMode
+
+            ? {
+
+                name: existingService.template.containers[0]?.args?.find(a => a.startsWith('--model='))?.split('=')[1].split('/')[2] || 
+
+                      existingService.template.containers[0]?.env?.find(e => e.name === 'OLLAMA_MODELS')?.value.split('/')[2] || '',
+
+                location: existingService.name.split('/')[3],
+
+              } as Bucket
+
+            : initialBucket;
+
+
+
     const [serviceName, setServiceName] = useState('');
+
     const [serviceNameError, setServiceNameError] = useState<string | null>(null);
+
     const [isCheckingName, setIsCheckingName] = useState(false);
     const [containerImage, setContainerImage] = useState('');
     const [containerPort, setContainerPort] = useState('');
@@ -849,6 +941,7 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
     }, [selectedSubnet, subnets]);
 
     useEffect(() => {
+        if (isEditMode) return; // Don't reset values when editing
         if (model.source === 'ollama') {
             setServiceName(`ollama-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
             setContainerImage('ollama/ollama');
@@ -904,33 +997,58 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
     };
 
     useEffect(() => {
-        if (model.source === 'ollama') {
-            setServiceName(`ollama-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
-            setContainerImage('ollama/ollama');
-            setContainerPort('11434');
-            setArgs([]);
-            setEnvVars([
-                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama` },
-                { id: 2, key: 'OLLAMA_DEBUG', value: 'false' },
-                { id: 3, key: 'OLLAMA_KEEP_ALIVE', value: '-1' },
-                { id: 4, key: 'MODEL', value: model.id },
-            ]);
-        } else { // Default to vLLM for huggingface
-            setServiceName(`vllm-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
-            setContainerImage('vllm/vllm-openai');
-            setContainerPort('8000');
-            setArgs([
-                { id: 1, key: '--model', value: `/gcs/${bucket.name}/${model.id}` },
-                { id: 2, key: '--tensor-parallel-size', value: '1' },
-                { id: 3, key: '--port', value: '8000' },
-                { id: 4, key: '--gpu-memory-utilization', value: '0.80' },
-                { id: 5, key: '--max-num-seqs', value: '128' },
-            ]);
-            setEnvVars([
-                { id: 1, key: 'HF_HUB_OFFLINE', value: '1' },
-            ]);
+        if (isEditMode && existingService) {
+            // Pre-fill form from existing service
+            const container = existingService.template.containers[0];
+            setServiceName(existingService.name.split('/')[5]);
+            setContainerImage(container.image);
+            setContainerPort(container.ports?.[0]?.containerPort?.toString() || '');
+            setCpu(container.resources?.limits?.cpu || '8');
+            setMemory(container.resources?.limits?.memory || '16Gi');
+            setGpu(existingService.template.nodeSelector?.accelerator || '');
+            setMinInstances(existingService.template.scaling?.minInstanceCount || 0);
+            setMaxInstances(existingService.template.scaling?.maxInstanceCount || 1);
+            setArgs(container.args?.map((arg, i) => {
+                const [key, ...valueParts] = arg.split('=');
+                return { id: i, key, value: valueParts.join('=') };
+            }) || []);
+            setEnvVars(container.env?.map((env, i) => ({ id: i, key: env.name, value: env.value })) || []);
+            
+            const vpcAccess = existingService.template.vpcAccess;
+            if (vpcAccess && vpcAccess.networkInterfaces && vpcAccess.networkInterfaces.length > 0) {
+                setUseVpc(true);
+                setSelectedSubnet(vpcAccess.networkInterfaces[0].subnetwork || '');
+            } else {
+                setUseVpc(false);
+            }
+
+        } else {
+            // Pre-fill for new service
+            if (model.source === 'ollama') {
+                setServiceName(`ollama-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
+                setContainerImage('ollama/ollama');
+                            setContainerPort('11434');
+                            setArgs([]);
+                            setEnvVars([
+                                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama` },
+                                { id: 2, key: 'OLLAMA_DEBUG', value: 'false' },
+                                { id: 3, key: 'OLLAMA_KEEP_ALIVE', value: '-1' },
+                                { id: 4, key: 'MODEL', value: model.id },
+                            ]);            } else { // vLLM
+                setServiceName(`vllm-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
+                setContainerImage('vllm/vllm-openai');
+                setContainerPort('8000');
+                setArgs([
+                    { id: 1, key: '--model', value: `/gcs/${bucket.name}/${model.id}` },
+                    { id: 2, key: '--tensor-parallel-size', value: '1' },
+                    { id: 3, key: '--port', value: '8000' },
+                    { id: 4, key: '--gpu-memory-utilization', value: '0.80' },
+                    { id: 5, key: '--max-num-seqs', value: '128' },
+                ]);
+                setEnvVars([ { id: 1, key: 'HF_HUB_OFFLINE', value: '1' } ]);
+            }
         }
-    }, [model, bucket.name]);
+    }, [existingService]);
 
     const handleArgChange = (id: number, field: 'key' | 'value', value: string) => {
         setArgs(args.map(arg => arg.id === id ? { ...arg, [field]: value } : arg));
@@ -983,34 +1101,63 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
     }, [serviceName, project.projectId, bucket.location]);
 
     const handleDeploy = async () => {
-        if (serviceNameError) return;
+        if (!isEditMode && serviceNameError) return;
         setIsDeploying(true);
         setDeployError(null);
         setDeployProgress([]);
 
+        const endpoint = isEditMode ? '/api/services/update' : '/api/services/deploy';
+
+        // For updates, we need to send a "clean" service object containing only the
+        // fields that are user-configurable. Sending back the full object we received
+        // (with fields like createTime, uid, etc.) will cause an API error.
+        const servicePayload = {
+            name: `projects/${project.projectId}/locations/${bucket.location.toLowerCase()}/services/${serviceName}`,
+            template: {
+                ...(isEditMode ? existingService?.template : {}),
+                timeout: { seconds: isEditMode ? (typeof existingService?.template?.timeout === 'string' ? parseInt(existingService.template.timeout, 10) : existingService?.template?.timeout?.seconds) || 300 : 300 },
+                gpuZonalRedundancyDisabled: gpuZonalRedundancyDisabled,
+                scaling: { minInstanceCount: minInstances, maxInstanceCount: maxInstances },
+                nodeSelector: { accelerator: gpu },
+                containers: [{
+                    image: containerImage,
+                    ports: [{ containerPort: parseInt(containerPort, 10) }],
+                    resources: { limits: { cpu, memory, 'nvidia.com/gpu': '1' } },
+                    args: args.map(arg => `${arg.key}=${arg.value}`),
+                    env: envVars.map(env => ({ name: env.key, value: env.value })),
+                    volumeMounts: [{ name: 'gcs-bucket', mountPath: `/gcs/${bucket.name}` }],
+                }],
+                volumes: [{ name: 'gcs-bucket', gcs: { bucket: bucket.name, readOnly: true } }],
+                annotations: {
+                    ...(isEditMode ? existingService?.template?.annotations : {}),
+                },
+            },
+            labels: {
+                ...(isEditMode ? existingService?.labels : {}),
+                'managed-by': 'llm-manager',
+            }
+        };
+
+        if (useVpc && selectedSubnet) {
+            servicePayload.template.vpcAccess = {
+                networkInterfaces: [{ subnetwork: selectedSubnet }],
+                egress: 'ALL_TRAFFIC',
+            };
+            // Clean up old annotations if they exist
+            if (servicePayload.template.annotations) {
+                delete servicePayload.template.annotations['run.googleapis.com/network-interfaces'];
+                delete servicePayload.template.annotations['run.googleapis.com/vpc-access-egress'];
+            }
+        } else {
+            (servicePayload.template as any).vpcAccess = null;
+        }
+
+
         try {
-            const response = await fetch('/api/services/deploy', {
+            const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    projectId: project.projectId,
-                    region: bucket.location,
-                    serviceName,
-                    containerImage,
-                    containerPort,
-                    cpu,
-                    memory,
-                    gpu,
-                    gpuZonalRedundancyDisabled,
-                    minInstances,
-                    maxInstances,
-                    args,
-                    envVars,
-                    bucketName: bucket.name,
-                    modelId: model.id,
-                    useVpc,
-                    subnet: selectedSubnet,
-                }),
+                body: JSON.stringify(servicePayload),
             });
 
             if (!response.body) throw new Error('Deployment failed: No response body.');
@@ -1033,6 +1180,7 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                         }
 
                         if (json.creationStarted) {
+                            setDeployProgress(prev => [...prev, { message: `Service ${isEditMode ? 'updated' : 'deployed'} successfully. Redirecting...` }]);
                             setTimeout(() => {
                                 onDeploymentStart(json.serviceName, json.region);
                             }, 5000); // Wait 5 seconds before redirecting
@@ -1050,7 +1198,6 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
             const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
             setDeployError(errorMessage);
             setDeployProgress(prev => [...prev, { error: errorMessage }]);
-        } finally {
             setIsDeploying(false);
         }
     };
@@ -1060,8 +1207,8 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
             <div className="max-w-4xl mx-auto">
                 <div className="flex justify-between items-center pb-4 mb-6">
                     <div>
-                        <button onClick={onClose} className="text-sm font-medium text-blue-600 hover:underline mb-2">← Back to Models</button>
-                        <h1 className="text-xl font-medium text-gray-800">Deploy Model: {model.id}</h1>
+                        <button onClick={onClose} className="text-sm font-medium text-blue-600 hover:underline mb-2">← Back to {isEditMode ? 'Services' : 'Models'}</button>
+                        <h1 className="text-xl font-medium text-gray-800">{isEditMode ? `Edit Service: ${serviceName}` : `Deploy Model: ${model.id}`}</h1>
                     </div>
                 </div>
 
@@ -1072,17 +1219,17 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Service Name</label>
-                                <input type="text" value={serviceName} onChange={e => setServiceName(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                                {isCheckingName && <p className="text-sm text-gray-500 mt-1">Checking name...</p>}
-                                {serviceNameError && <p className="text-sm text-red-600 mt-1">{serviceNameError}</p>}
+                                <input type="text" value={serviceName} onChange={e => setServiceName(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md disabled:bg-gray-100" disabled={isEditMode} />
+                                {!isEditMode && isCheckingName && <p className="text-sm text-gray-500 mt-1">Checking name...</p>}
+                                {!isEditMode && serviceNameError && <p className="text-sm text-red-600 mt-1">{serviceNameError}</p>}
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Region</label>
-                                <p className="mt-1 text-sm text-gray-800 pt-2">{bucket.location.toLowerCase()} (locked to model&apos;s region)</p>
+                                <p className="mt-1 text-sm text-gray-800 pt-2">{bucket.location.toLowerCase()} (locked)</p>
                             </div>
                         </div>
                     </div>
-
+                    
                     {/* Container */}
                     <div className="border-b border-gray-200 pb-6">
                         <h2 className="text-base font-semibold text-gray-800 mb-4">Container</h2>
@@ -1227,9 +1374,9 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                     )}
 
                     <div className="flex justify-end pt-8">
-                        <button onClick={handleDeploy} disabled={isDeploying || !!serviceNameError || isCheckingName} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">
+                        <button onClick={handleDeploy} disabled={isDeploying || (!isEditMode && !!serviceNameError) || isCheckingName} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">
                             {isDeploying && <Spinner />}
-                            Deploy
+                            {isEditMode ? 'Update' : 'Deploy'}
                         </button>
                     </div>
                 </div>

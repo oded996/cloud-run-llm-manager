@@ -11,6 +11,34 @@ This document serves as a running changelog to track the progress of the Cloud R
 - **Be Specific but Concise:** Briefly describe each change. For bugs, include a short summary of the issue and the solution.
 - **Update Chronologically:** Always add the newest entries at the top of the file.
 
+## 2025-10-29 (Final Session)
+
+### Implemented Features
+
+- **Edit Service Flow:**
+    - Implemented a complete end-to-end flow for editing existing services.
+    - The `ServiceDetailView` now has an "Edit" button that opens the familiar deployment screen, pre-filled with the service's current configuration.
+    - Created a new backend API (`/api/services/update`) to handle the update logic.
+    - The `DeployServiceView` component was refactored to be fully data-driven, deriving its state from the `existingService` prop when in edit mode.
+
+### UI/UX Overhaul
+
+- **Tabbed Service Details View:**
+    - Refactored the `ServiceDetailView` to use a tabbed layout, mirroring the Google Cloud console.
+    - Created a new "Details" tab that displays all service configuration (GPU, networking, etc.) in a dense, easy-to-read format.
+    - Integrated the existing Logs, Permissions, and Chat components into their own tabs.
+
+### Bug Fixes & UX Improvements
+
+- **Log Viewer Enhancements:**
+    - The log viewer now fetches the last two minutes of logs upon opening.
+    - It automatically scrolls to the bottom when the tab is opened.
+    - The polling interval was decreased to 1.5 seconds for a more real-time experience.
+- **Corrected Deployment Payloads:**
+    - Fixed a series of bugs where the deployment and update payloads were malformed, causing API errors (e.g., missing `labels`, incorrect `timeout` format, incorrect `vpcAccess` structure, and including read-only fields in update requests).
+- **Resolved Infinite Re-render:** Fixed a `useEffect` dependency loop that was causing the "Edit Service" screen to crash.
+- **Fixed Edit State Bugs:** Resolved issues where the service name was being incorrectly parsed and the VPC checkbox was not being set correctly when entering edit mode.
+
 ## 2025-10-29 (Evening Session)
 
 ### UI/UX Overhaul
