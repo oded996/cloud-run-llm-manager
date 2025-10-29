@@ -11,6 +11,31 @@ This document serves as a running changelog to track the progress of the Cloud R
 - **Be Specific but Concise:** Briefly describe each change. For bugs, include a short summary of the issue and the solution.
 - **Update Chronologically:** Always add the newest entries at the top of the file.
 
+## 2025-10-29
+
+### Implemented Features
+
+- **Dynamic GPU Resource Configuration:**
+    - Updated the central `regions.ts` config file to include detailed information for each GPU type, including its availability status (`GA`, `Private Preview`), and valid vCPU and Memory configurations.
+    - The "Deploy Service" UI is now fully dynamic. The vCPU and Memory dropdowns automatically update based on the selected GPU, ensuring only valid combinations can be deployed.
+    - The GPU's availability status is now displayed in the selection dropdown.
+
+### Backend & Deployment Fixes
+
+- **Upgraded to `@google-cloud/run` Client:**
+    - **Issue:** The generic `googleapis` library was unable to handle the `v2alpha1` API required for deploying services with Private Preview GPUs (like H100 and RTX 6000), causing deployment failures.
+    - **Solution:** Replaced the `googleapis` client with the dedicated `@google-cloud/run` library in the deployment API. This new client correctly handles different API versions and modern authentication flows.
+- **Added Alpha Launch Stage Annotation:**
+    - **Issue:** Deployments with Private Preview GPUs were failing due to a missing `launchStage` annotation.
+    - **Solution:** The deployment API now conditionally adds the `launchStage: 'ALPHA'` field to the service configuration when a Private Preview GPU is selected, satisfying the API requirement.
+- **Corrected GPU Accelerator Names:**
+    - **Issue:** The deployment API was using an incorrect accelerator name for the NVIDIA RTX 6000 Pro GPU.
+    - **Solution:** Updated the `regions.ts` configuration to use the correct, API-validated accelerator string (`nvidia-rtx-pro-6000`).
+
+### Bug Fixes
+
+- **Fixed Build Error:** Resolved a syntax error (`const` declaration missing initialization) in the `DeployServiceView` component that was introduced during recent refactoring.
+
 ## 2025-10-28
 
 ### Implemented Features

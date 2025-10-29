@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { GoogleAuth } from 'google-auth-library';
-import { google } from 'googleapis';
+import { ServicesClient } from '@google-cloud/run';
+import { SUPPORTED_REGIONS } from '@/app/config/regions';
 
 export async function POST(request: Request) {
   const payload = await request.json();
@@ -10,10 +10,11 @@ export async function POST(request: Request) {
   const encoder = new TextEncoder();
 
   const sendEvent = (data: any) => {
-    writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+    writer.write(encoder.encode(`data: ${JSON.stringify(data)}
+
+`));
   };
 
-  // Start the deployment but don't wait for it to finish.
   deployService(payload, sendEvent).finally(() => {
     writer.close();
   });
@@ -28,116 +29,117 @@ export async function POST(request: Request) {
 }
 
 async function deployService(payload: any, sendEvent: (data: any) => void) {
-      const {
-          projectId,
-          region,
-          serviceName,
-          containerImage,
-          containerPort,
-          cpu,
-          memory,
-                  gpu,
-                  gpuZonalRedundancyDisabled,
-                  minInstances,
-                  maxInstances,
-                  args,
-                  envVars,
-                  bucketName,
-                  useVpc,
-                  subnet,
-              } = payload;
-          
-              try {
-                  sendEvent({ message: 'Authenticating with Google Cloud...' });
-                  const auth = new GoogleAuth({
-                      scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-                  }) as any;
-                  const client = await auth.getClient();
-                  const run = google.run({
-                      version: 'v2',
-                      auth: client,
-                  });
-          
-                  sendEvent({ message: 'Constructing service configuration...' });
+  const {
+    projectId,
+    region,
+    serviceName,
+    containerImage,
+    containerPort,
+    cpu,
+    memory,
+    gpu,
+    gpuZonalRedundancyDisabled,
+    minInstances,
+    maxInstances,
+    args,
+    envVars,
+    bucketName,
+    useVpc,
+    subnet,
+  } = payload;
 
-                  const serviceConfig: any = {
-                    template: {
-                        gpuZonalRedundancyDisabled: gpuZonalRedundancyDisabled,
-                        annotations: {},
-                        scaling: {
-                            minInstanceCount: minInstances,
-                            maxInstanceCount: maxInstances,
-                        },
-                        nodeSelector: {
-                            accelerator: gpu,
-                        },
-                        containers: [
-                            {
-                                image: containerImage,
-                                ports: [{ containerPort: parseInt(containerPort, 10) }],
-                                resources: {
-                                    limits: {
-                                        cpu,
-                                        memory,
-                                        'nvidia.com/gpu': '1',
-                                    }
-                                },
-                                args: args.map((arg: { key: string, value: string }) => `${arg.key}=${arg.value}`),
-                                env: envVars.map((env: { key: string, value: string }) => ({ name: env.key, value: env.value })),
-                                volumeMounts: [{
-                                    name: 'gcs-bucket',
-                                    mountPath: `/gcs/${bucketName}`,
-                                }],
-                            },
-                        ],
-                        volumes: [{
-                            name: 'gcs-bucket',
-                            gcs: {
-                                bucket: bucketName,
-                                readOnly: true,
-                            }
-                        }],
-                    },
-                    labels: {
-                        'managed-by': 'llm-manager',
-                    },
-                };
+  try {
+    sendEvent({ message: 'Initializing Google Cloud client...' });
 
-                if (useVpc && subnet) {
-                    sendEvent({ message: `Configuring VPC network interface for subnet: ${subnet}` });
-                    const compute = google.compute({ version: 'v1', auth: client });
-                    const subnetDetails = await compute.subnetworks.get({
-                        project: projectId,
-                        region: region.toLowerCase(),
-                        subnetwork: subnet,
-                    });
-                    const networkName = subnetDetails.data.network?.split('/').pop();
-                    if (!networkName) {
-                        throw new Error(`Could not determine network name for subnet ${subnet}`);
-                    }
+    const regionConfig = SUPPORTED_REGIONS.find(r => r.name === region.toLowerCase());
+    const gpuConfig = regionConfig?.gpus.find(g => g.accelerator === gpu);
+    const isAlpha = gpuConfig?.status === 'Private Preview';
 
-                    serviceConfig.template.annotations['run.googleapis.com/network-interfaces'] = `[{"network":"${networkName}","subnetwork":"${subnet}"}]`;
-                    serviceConfig.template.annotations['run.googleapis.com/vpc-access-egress'] = 'all-traffic';
-                }
-          
-        sendEvent({ message: `Initiating deployment for service '${serviceName}'...` });
-        console.log('Service configuration:', JSON.stringify(serviceConfig, null, 2));
+    let apiEndpoint = `${region.toLowerCase()}-run.googleapis.com`;
+    if (isAlpha) {
+        apiEndpoint = `run.googleapis.com`; // The alpha endpoint is global
+        sendEvent({ message: `Using alpha API endpoint for Private Preview GPU...` });
+    }
 
-        await run.projects.locations.services.create({
-          parent: `projects/${projectId}/locations/${region.toLowerCase()}`,
-          serviceId: serviceName,
-          requestBody: serviceConfig,
-        });
+    // The client will automatically use Application Default Credentials.
+    const runClient = new ServicesClient({
+        apiEndpoint: apiEndpoint,
+    });
 
-    sendEvent({ 
-      message: `Service '${serviceName}' creation initiated.`, 
-      serviceName: serviceName,
-      region: region,
-      creationStarted: true 
+    sendEvent({ message: 'Constructing service configuration...' });
+
+    const serviceConfig: any = {
+      template: {
+          gpuZonalRedundancyDisabled: gpuZonalRedundancyDisabled,
+          annotations: {},
+          scaling: {
+              minInstanceCount: minInstances,
+              maxInstanceCount: maxInstances,
+          },
+          nodeSelector: {
+              accelerator: gpu,
+          },
+          containers: [
+              {
+                  image: containerImage,
+                  ports: [{ containerPort: parseInt(containerPort, 10) }],
+                  resources: {
+                      limits: {
+                          cpu,
+                          memory,
+                          'nvidia.com/gpu': '1',
+                      }
+                  },
+                  args: args.map((arg: { key: string, value: string }) => `${arg.key}=${arg.value}`),
+                  env: envVars.map((env: { key: string, value: string }) => ({ name: env.key, value: env.value })),
+                  volumeMounts: [{
+                      name: 'gcs-bucket',
+                      mountPath: `/gcs/${bucketName}`,
+                  }],
+              },
+          ],
+          volumes: [{
+              name: 'gcs-bucket',
+              gcs: {
+                  bucket: bucketName,
+                  readOnly: true,
+              }
+          }],
+      },
+      labels: {
+          'managed-by': 'llm-manager',
+      },
+  };
+
+  if (isAlpha) {
+    serviceConfig.launchStage = 'ALPHA';
+  }
+
+  if (useVpc && subnet) {
+      sendEvent({ message: `Configuring VPC network interface for subnet: ${subnet}` });
+      serviceConfig.template.annotations['run.googleapis.com/network-interfaces'] = `[{"subnetwork":"${subnet}"}]`;
+      serviceConfig.template.annotations['run.googleapis.com/vpc-access-egress'] = 'all-traffic';
+  }
+
+    sendEvent({ message: `Initiating deployment for service '${serviceName}'...` });
+    
+    const parent = `projects/${projectId}/locations/${region.toLowerCase()}`;
+    const [operation] = await runClient.createService({
+        parent: parent,
+        service: serviceConfig,
+        serviceId: serviceName,
+    });
+
+    sendEvent({
+        message: `Service '${serviceName}' creation initiated. Operation: ${operation.name}`,
+        serviceName: serviceName,
+        region: region,
+        creationStarted: true 
     });
 
   } catch (error: any) {
     console.error('Failed to deploy service:', error);
-    sendEvent({ error: error.message || 'An unknown error occurred.' });
+    const errorMessage = error.details || error.message || 'An unknown error occurred.';
+    sendEvent({ error: errorMessage });
   }
 }

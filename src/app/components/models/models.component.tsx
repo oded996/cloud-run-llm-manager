@@ -556,6 +556,14 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
     const regionConfig = SUPPORTED_REGIONS.find(r => r.name === bucket.location.toLowerCase());
     const [gpu, setGpu] = useState(regionConfig?.gpus[0]?.accelerator || '');
 
+    useEffect(() => {
+        const selectedGpuConfig = regionConfig?.gpus.find(g => g.accelerator === gpu);
+        if (selectedGpuConfig) {
+            setCpu(selectedGpuConfig.validCpus[0]);
+            setMemory(selectedGpuConfig.validMemory[0]);
+        }
+    }, [gpu, regionConfig?.gpus]);
+
     const [gpuZonalRedundancyDisabled, setGpuZonalRedundancyDisabled] = useState(true);
     
     const [args, setArgs] = useState<{id: number, key: string, value: string}[]>([]);
@@ -895,21 +903,23 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">GPU</label>
                                 <select value={gpu} onChange={e => setGpu(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
-                                    {regionConfig?.gpus.map(g => <option key={g.name} value={g.accelerator}>{g.name}</option>)}
+                                    {regionConfig?.gpus.map(g => (
+                                        <option key={g.name} value={g.accelerator}>
+                                            {g.name} ({g.status})
+                                        </option>
+                                    ))}
                                 </select>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">vCPUs</label>
                                 <select value={cpu} onChange={e => setCpu(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
-                                    <option value="8">8</option>
-                                    <option value="16">16</option>
+                                    {regionConfig?.gpus.find(g => g.accelerator === gpu)?.validCpus.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Memory</label>
                                 <select value={memory} onChange={e => setMemory(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
-                                    <option value="16Gi">16 GB</option>
-                                    <option value="32Gi">32 GB</option>
+                                    {regionConfig?.gpus.find(g => g.accelerator === gpu)?.validMemory.map(m => <option key={m} value={m}>{m.replace('Gi', ' GB')}</option>)}
                                 </select>
                             </div>
                         </div>
