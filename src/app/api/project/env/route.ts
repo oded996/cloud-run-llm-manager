@@ -2,10 +2,6 @@
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-  const lockedProjectId = process.env.GCP_PROJECT_ID;
-
-  return NextResponse.json({
-    isProjectLocked: !!lockedProjectId,
-    lockedProjectId: lockedProjectId || null,
-  });
+  const hfToken = process.env.HUGGING_FACE_HUB_TOKEN || '';
+  return NextResponse.json({ hfToken });
 }

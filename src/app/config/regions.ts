@@ -40,11 +40,6 @@ export const SUPPORTED_REGIONS: RegionConfig[] = [
     ],
   },
   {
-    name: 'us-west1',
-    description: 'Oregon',
-    gpus: [], // No GPUs as per new availability
-  },
-  {
     name: 'europe-west1',
     description: 'Belgium',
     gpus: [
@@ -64,11 +59,6 @@ export const SUPPORTED_REGIONS: RegionConfig[] = [
     gpus: [
       { name: 'NVIDIA L4', vram_gb: 24, accelerator: 'nvidia-l4', status: 'GA', validCpus: ['8', '12', '16'], validMemory: ['16Gi', '24Gi', '32Gi'] },
     ],
-  },
-  {
-    name: 'asia-northeast1',
-    description: 'Tokyo',
-    gpus: [], // No GPUs as per new availability
   },
 ];
 

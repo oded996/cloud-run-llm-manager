@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
-import { GoogleAuth } from 'google-auth-library';
-import { google } from 'googleapis';
+import { ServicesClient } from '@google-cloud/run';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const projectId = searchParams.get('projectId');
-  const region = searchParams.get('region');
+  const region = searchParams.get('region')?.toLowerCase();
   const serviceName = searchParams.get('serviceName');
 
   if (!projectId || !region || !serviceName) {
@@ -13,26 +12,24 @@ export async function GET(request: Request) {
   }
 
   try {
-    const auth = new GoogleAuth({
-      scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-    }) as any;
-    const client = await auth.getClient();
-    const run = google.run({
-      version: 'v2',
-      auth: client,
+    const runClient = new ServicesClient({
+        apiEndpoint: `${region}-run.googleapis.com`,
     });
 
-    await run.projects.locations.services.get({
-      name: `projects/${projectId}/locations/${region}/services/${serviceName}`,
-    });
+    const name = `projects/${projectId}/locations/${region}/services/${serviceName}`;
+    
+    await runClient.getService({ name });
 
-    // If the above call succeeds, the service exists
+    // If the above call succeeds without throwing an error, the service exists.
     return NextResponse.json({ exists: true });
+
   } catch (error: any) {
-    // A 404 error means the service does not exist, which is a valid state
-    if (error.code === 404) {
+    // The client library throws an error with a `code` property for non-2xx responses.
+    // A code of 5 corresponds to NOT_FOUND.
+    if (error.code === 5) {
       return NextResponse.json({ exists: false });
     }
+
     // For other errors, return an error response
     console.error('Failed to check service existence:', error);
     return NextResponse.json({ error: error.message || 'An unknown error occurred.' }, { status: 500 });

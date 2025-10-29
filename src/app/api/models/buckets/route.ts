@@ -29,9 +29,10 @@ export async function GET(request: Request) {
           try {
             const [metadataContents] = await file.download();
             const metadata = JSON.parse(metadataContents.toString());
+            const [bucketMetadata] = await bucket.getMetadata();
             return {
               name: bucket.name,
-              location: (await bucket.getMetadata())[0].location,
+              location: bucketMetadata.location.toLowerCase(),
               models: metadata.models || [],
             };
           } catch (e) {
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
             contentType: 'application/json',
         });
 
-        return NextResponse.json({ success: true, name: bucketName, location, models: [] });
+        return NextResponse.json({ success: true, name: bucketName, location: location.toLowerCase(), models: [] });
     } catch (error: any) {
         console.error('Failed to create bucket:', error.message);
         return NextResponse.json(

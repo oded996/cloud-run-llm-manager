@@ -50,6 +50,37 @@ const Spinner = () => (
     </svg>
 );
 
+const ValidationSpinner = () => (
+    <svg className="animate-spin h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+    </svg>
+);
+
+const CheckIcon = () => (
+    <svg className="h-5 w-5 text-green-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+    </svg>
+);
+
+const ErrorIcon = () => (
+     <svg className="h-5 w-5 text-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+    </svg>
+);
+
+const GreenCheckIcon = () => (
+    <svg className="h-4 w-4 text-green-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+    </svg>
+);
+
+const RedXIcon = () => (
+    <svg className="h-4 w-4 text-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+    </svg>
+);
+
 const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Project | null, onSwitchToServices: (serviceName: string, region: string) => void }) => {
   const [viewMode, setViewMode] = useState<'list' | 'import' | 'deploy'>('list');
   const [buckets, setBuckets] = useState<Bucket[]>([]);
@@ -162,18 +193,40 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     const [createBucketError, setCreateBucketError] = useState<string | null>(null);
     const [newBucketName, setNewBucketName] = useState(`${project.projectId}-llm-models`);
     const [newBucketRegion, setNewBucketRegion] = useState(SUPPORTED_REGIONS[0]?.name || '');
+    const [bucketRegionError, setBucketRegionError] = useState<string | null>(null);
 
-    const [modelSource, setModelSource] = useState('huggingface');
+    const [modelSource, setModelSource] = useState('ollama');
     const [modelId, setModelId] = useState('');
     const [hfToken, setHfToken] = useState('');
 
+    const [isValidating, setIsValidating] = useState(false);
+    const [validationError, setValidationError] = useState<string | null>(null);
+    const [modelExists, setModelExists] = useState<boolean | null>(null);
     const [preflightInfo, setPreflightInfo] = useState<PreflightInfo | null>(null);
-    const [isPreflighting, setIsPreflighting] = useState(false);
-    const [preflightError, setPreflightError] = useState<string | null>(null);
+
+    const [estimatedVram, setEstimatedVram] = useState<number | null>(null);
+    const [recommendedGpus, setRecommendedGpus] = useState<string[]>([]);
 
     const [isDownloading, setIsDownloading] = useState(false);
     const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>({ files: [], totalProgress: 0 });
     const [downloadError, setDownloadError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const fetchEnv = async () => {
+            try {
+                const response = await fetch('/api/project/env');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.hfToken) {
+                        setHfToken(data.hfToken);
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to fetch env vars", e);
+            }
+        };
+        fetchEnv();
+    }, []);
 
     useEffect(() => {
         const fetchProjectBuckets = async () => {
@@ -183,9 +236,7 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                 if (response.ok) {
                     const data = await response.json();
                     setProjectBuckets(data);
-                    if (data.length > 0) {
-                        setTargetBucket(data[0].name);
-                    } else {
+                    if (data.length === 0) {
                         setShowCreateBucketForm(true);
                     }
                 }
@@ -197,6 +248,86 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
         };
         fetchProjectBuckets();
     }, [project.projectId]);
+
+    useEffect(() => {
+        const selectedBucket = projectBuckets.find(b => b.name === targetBucket);
+        if (selectedBucket) {
+            const regionConfig = SUPPORTED_REGIONS.find(r => r.name === selectedBucket.location.toLowerCase());
+            if (!regionConfig || regionConfig.gpus.length === 0) {
+                setBucketRegionError(`The selected bucket is in ${selectedBucket.location.toLowerCase()}, which does not support GPUs. Please select a different bucket or create one in a supported region.`);
+            } else {
+                setBucketRegionError(null);
+            }
+        }
+    }, [targetBucket, projectBuckets]);
+
+    useEffect(() => {
+        const handler = setTimeout(async () => {
+            if (!modelId) {
+                setIsValidating(false);
+                setValidationError(null);
+                setModelExists(null);
+                setPreflightInfo(null);
+                setStep(1); // Go back to the initial step if input is cleared
+                return;
+            }
+
+            setIsValidating(true);
+            setValidationError(null);
+            setModelExists(null);
+            setPreflightInfo(null);
+            
+            const url = modelSource === 'huggingface' 
+                ? '/api/models/import/preflight' 
+                : '/api/models/import/ollama/preflight';
+            
+            const body = modelSource === 'huggingface'
+                ? { modelId, hfToken }
+                : { modelId };
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Model not found.');
+                }
+                setModelExists(true);
+                setPreflightInfo(data);
+
+                // --- Start VRAM Calculation ---
+                const selectedBucket = projectBuckets.find(b => b.name === targetBucket);
+                if (selectedBucket) {
+                    const regionConfig = SUPPORTED_REGIONS.find(r => r.name === selectedBucket.location.toLowerCase());
+                    const vram = (data.totalSize / (1024 * 1024 * 1024)) * 1.2;
+                    setEstimatedVram(vram);
+
+                    if (regionConfig) {
+                        const recommendations = regionConfig.gpus
+                            .filter(gpu => gpu.vram_gb >= vram)
+                            .map(gpu => gpu.name);
+                        setRecommendedGpus(recommendations);
+                    }
+                }
+                // --- End VRAM Calculation ---
+
+                setStep(3); // Automatically advance to confirmation
+            } catch (err: any) {
+                setModelExists(false);
+                setValidationError(err.message);
+                setStep(1); // Go back to input step on error
+            } finally {
+                setIsValidating(false);
+            }
+        }, 300); // 300ms debounce
+
+        return () => {
+            clearTimeout(handler);
+        };
+    }, [modelId, modelSource, hfToken, targetBucket, projectBuckets]);
 
     const handleCreateBucket = async () => {
         setIsCreatingBucket(true);
@@ -226,317 +357,336 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
             setIsCreatingBucket(false);
         }
     };
-
-            const handlePreflight = async () => {
-                setIsPreflighting(true);
-                setPreflightError(null);
-                setPreflightInfo(null);
-                
-                const url = modelSource === 'huggingface' 
-                    ? '/api/models/import/preflight' 
-                    : '/api/models/import/ollama/preflight';
-                
-                const body = modelSource === 'huggingface'
-                    ? { modelId, hfToken }
-                    : { modelId };
     
-                try {
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body),
-                    });
-                    const data = await response.json();
-                    if (!response.ok) {
-                        throw new Error(data.error || 'Preflight check failed.');
-                    }
-                    setPreflightInfo(data);
-                    setStep(3);
-                } catch (err: unknown) {
-                    const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-                    setPreflightError(errorMessage);
-                } finally {
-                    setIsPreflighting(false);
-                }
-            };
-    
-            const handleStartDownload = async () => {
-                setIsDownloading(true);
-                setDownloadError(null);
-                setDownloadProgress({
-                    message: 'Starting download...', 
-                    files: preflightInfo!.files.map(f => ({ name: f.name, total: f.size, downloaded: 0 })),
-                    totalProgress: 0,
-                });
-                setStep(4);
-    
-                const url = modelSource === 'huggingface'
-                    ? '/api/models/import/start'
-                    : '/api/models/import/ollama/start';
-    
-                const body = modelSource === 'huggingface'
-                    ? {
-                        modelId,
-                        bucketName: targetBucket,
-                        hfToken,
-                        projectId: project.projectId,
-                        totalSize: preflightInfo?.totalSize,
-                        files: preflightInfo?.files,
-                      }
-                    : {
-                        modelId,
-                        bucketName: targetBucket,
-                        projectId: project.projectId,
-                        totalSize: preflightInfo?.totalSize,
-                        files: preflightInfo?.files,
-                        manifest: preflightInfo?.manifest, // Pass manifest for Ollama
-                      };
-                
-                const verifyDownload = async (retryCount = 0): Promise<void> => {
-                    setDownloadProgress(prev => ({ ...prev, message: `Verifying download (attempt ${retryCount + 1})...` }));
-                    try {
-                        const verifyResponse = await fetch(`/api/models/import/verify?projectId=${project.projectId}&bucketName=${targetBucket}&modelId=${modelId}`);
-                        const verifyData = await verifyResponse.json();
-    
-                        if (verifyResponse.ok && verifyData.verified) {
-                            setDownloadProgress(prev => ({ ...prev, message: 'Verification successful! Import complete.' }));
-                            setTimeout(onImportSuccess, 2000);
-                            setIsDownloading(false);
-                        } else {
-                            throw new Error(verifyData.error || 'Verification failed.');
-                        }
-                    } catch (err: unknown) {
-                        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-                        console.error(`Verification attempt ${retryCount + 1} failed:`, err);
-                        if (retryCount < 2) { // 3 retries total (0, 1, 2)
-                            setTimeout(() => verifyDownload(retryCount + 1), 3000); // Wait 3 seconds before retrying
-                        } else {
-                            setDownloadError(`Download completed, but verification failed after 3 attempts. Please check the bucket and try importing again. Error: ${errorMessage}`);
-                            setIsDownloading(false);
-                        }
-                    }
-                };
-    
-                try {
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body),
-                    });
-    
-                    if (!response.body) throw new Error('Download failed: No response body.');
-    
-                    let buffer = '';            const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) {
-                    setDownloadProgress(prev => ({ ...prev, message: 'Download stream complete. Starting verification...' }));
-                    await verifyDownload();
-                    break;
-                }
-                
-                buffer += value;
-                let boundary = buffer.indexOf('\n\n');
-                while (boundary !== -1) {
-                    const message = buffer.substring(0, boundary);
-                    buffer = buffer.substring(boundary + 2);
-                    if (message.startsWith('data: ')) {
-                        try {
-                            const json = JSON.parse(message.substring(6));
-                            if (json.error) {
-                                console.error("Download error from server:", json.error);
-                                setDownloadError(json.error);
-                                setIsDownloading(false);
-                                return;
-                            }
-                            
-                            setDownloadProgress(prev => {
-                                const newFiles = prev.files?.map(f => {
-                                    if (f.name === json.file) {
-                                        return { ...f, downloaded: json.progress };
-                                    }
-                                    return f;
-                                }) || [];
-
-                                const totalDownloaded = newFiles.reduce((acc, f) => acc + f.downloaded, 0);
-                                const totalSize = newFiles.reduce((acc, f) => acc + f.total, 0);
-                                const totalProgress = totalSize > 0 ? (totalDownloaded / totalSize) * 100 : 0;
-
-                                return {
-                                    ...prev,
-                                    message: json.message || prev.message,
-                                    files: newFiles,
-                                    totalProgress: totalProgress,
-                                };
-                            });
-
-                        } catch (e) {
-                            console.error("Failed to parse SSE chunk", message, e);
-                        }
-                    }
-                    boundary = buffer.indexOf('\n\n');
-                }
+    const handleDownloadConfirmation = () => {
+        if (recommendedGpus.length === 0 && estimatedVram) {
+            const message = `This model requires an estimated ${estimatedVram.toFixed(2)} GB of vRAM, but no GPUs in the selected region meet this requirement. Proceeding with the download may not lead to a successful deployment. Are you sure you want to continue?`;
+            if (window.confirm(message)) {
+                handleStartDownload();
             }
-        } catch (err: unknown) {
-            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-            console.error("Download initiation failed:", err);
-            setDownloadError(errorMessage);
-            setIsDownloading(false);
+        } else {
+            handleStartDownload();
         }
     };
 
-    return (
-        <div className="p-6">
-            <div className="flex justify-between items-center pb-4 border-b border-gray-200 mb-6">
-                <h1 className="text-xl font-medium text-gray-800">Import Model</h1>
-                <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">Cancel</button>
-            </div>
+    const handleStartDownload = async () => {
+        setIsDownloading(true);
+        setDownloadError(null);
+        setDownloadProgress({
+            message: 'Starting download...', 
+            files: preflightInfo!.files.map(f => ({ name: f.name, total: f.size, downloaded: 0 })),
+            totalProgress: 0,
+        });
+        setStep(4);
 
-            <div className="space-y-6">
-                {/* Step 1 & 2: Target Bucket and Model Source */}
-                <div className="bg-white border border-gray-200 rounded-md">
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">Model Details</h2></div>
-                    <div className="p-4 space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Target Bucket</label>
-                            <div className="flex items-center space-x-2 mt-1">
-                                {isLoadingBuckets ? <p>Loading buckets...</p> :
-                                    <select value={targetBucket} onChange={e => setTargetBucket(e.target.value)} className="flex-grow p-2 border border-gray-300 rounded-md">
+        const url = modelSource === 'huggingface'
+            ? '/api/models/import/start'
+            : '/api/models/import/ollama/start';
+
+        const body = modelSource === 'huggingface'
+            ? {
+                modelId,
+                bucketName: targetBucket,
+                hfToken,
+                projectId: project.projectId,
+                totalSize: preflightInfo?.totalSize,
+                files: preflightInfo?.files,
+                }
+            : {
+                modelId,
+                bucketName: targetBucket,
+                projectId: project.projectId,
+                totalSize: preflightInfo?.totalSize,
+                files: preflightInfo?.files,
+                manifest: preflightInfo?.manifest, // Pass manifest for Ollama
+                };
+        
+        const verifyDownload = async (retryCount = 0): Promise<void> => {
+            setDownloadProgress(prev => ({ ...prev, message: `Verifying download (attempt ${retryCount + 1})...` }));
+            try {
+                const verifyResponse = await fetch(`/api/models/import/verify?projectId=${project.projectId}&bucketName=${targetBucket}&modelId=${modelId}`);
+                const verifyData = await verifyResponse.json();
+
+                if (verifyResponse.ok && verifyData.verified) {
+                    setDownloadProgress(prev => ({ ...prev, message: 'Verification successful! Import complete.' }));
+                    setTimeout(onImportSuccess, 2000);
+                    setIsDownloading(false);
+                } else {
+                    throw new Error(verifyData.error || 'Verification failed.');
+                }
+            } catch (err: unknown) {
+                const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+                console.error(`Verification attempt ${retryCount + 1} failed:`, err);
+                if (retryCount < 2) { // 3 retries total (0, 1, 2)
+                    setTimeout(() => verifyDownload(retryCount + 1), 3000); // Wait 3 seconds before retrying
+                } else {
+                    setDownloadError(`Download completed, but verification failed after 3 attempts. Please check the bucket and try importing again. Error: ${errorMessage}`);
+                    setIsDownloading(false);
+                }
+            }
+        };
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+
+            if (!response.body) throw new Error('Download failed: No response body.');
+
+            let buffer = '';            const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+            setDownloadProgress(prev => ({ ...prev, message: 'Download stream complete. Starting verification...' }));
+            await verifyDownload();
+            break;
+        }
+        
+        buffer += value;
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+            const message = buffer.substring(0, boundary);
+            buffer = buffer.substring(boundary + 2);
+            if (message.startsWith('data: ')) {
+                try {
+                    const json = JSON.parse(message.substring(6));
+                    if (json.error) {
+                        console.error("Download error from server:", json.error);
+                        setDownloadError(json.error);
+                        setIsDownloading(false);
+                        return;
+                    }
+                    
+                    setDownloadProgress(prev => {
+                        const newFiles = prev.files?.map(f => {
+                            if (f.name === json.file) {
+                                return { ...f, downloaded: json.progress };
+                            }
+                            return f;
+                        }) || [];
+
+                        const totalDownloaded = newFiles.reduce((acc, f) => acc + f.downloaded, 0);
+                        const totalSize = newFiles.reduce((acc, f) => acc + f.total, 0);
+                        const totalProgress = totalSize > 0 ? (totalDownloaded / totalSize) * 100 : 0;
+
+                        return {
+                            ...prev,
+                            message: json.message || prev.message,
+                            files: newFiles,
+                            totalProgress: totalProgress,
+                        };
+                    });
+
+                } catch (e) {
+                    console.error("Failed to parse SSE chunk", message, e);
+                }
+            }
+            boundary = buffer.indexOf('\n\n');
+        }
+    }
+} catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+    console.error("Download initiation failed:", err);
+    setDownloadError(errorMessage);
+    setIsDownloading(false);
+}
+};
+
+    return (
+        <div className="p-6 bg-gray-50 flex-grow">
+            <div className="max-w-4xl mx-auto">
+                <div className="flex justify-between items-center pb-4 mb-6">
+                    <div>
+                        <button onClick={onClose} className="text-sm font-medium text-blue-600 hover:underline mb-2">← Back to Models</button>
+                        <h1 className="text-xl font-medium text-gray-800">Import Model</h1>
+                    </div>
+                </div>
+
+                <div className="space-y-8 bg-white border border-gray-200 rounded-md p-6">
+                    {/* Target Bucket */}
+                    <div className="border-b border-gray-200 pb-6">
+                        <h2 className="text-base font-semibold text-gray-800 mb-4">Target Bucket</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Select an existing bucket</label>
+                                {isLoadingBuckets ? <p className="mt-1 text-sm text-gray-500">Loading buckets...</p> :
+                                    <select value={targetBucket} onChange={e => setTargetBucket(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
+                                        <option value="" disabled hidden>Select a bucket...</option>
                                         {projectBuckets.length === 0 && <option disabled>No buckets found</option>}
-                                        {projectBuckets.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
+                                        {projectBuckets.map(b => <option key={b.name} value={b.name}>{b.name} ({b.location.toLowerCase()})</option>)}
                                     </select>
                                 }
-                                <button onClick={() => setShowCreateBucketForm(prev => !prev)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Or create a new one</label>
+                                <button onClick={() => setShowCreateBucketForm(prev => !prev)} className="mt-1 w-full px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
                                     {showCreateBucketForm ? 'Cancel' : 'Create New Bucket'}
                                 </button>
                             </div>
                         </div>
+                        {bucketRegionError && <p className="text-red-500 text-sm mt-2">{bucketRegionError}</p>}
 
                         {showCreateBucketForm && (
-                            <div className="p-4 border-t border-gray-200 space-y-3">
-                                <h3 className="font-medium text-gray-800">Create a New Bucket</h3>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Bucket Name</label>
-                                    <input type="text" value={newBucketName} onChange={e => setNewBucketName(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Region</label>
-                                    <select value={newBucketRegion} onChange={e => setNewBucketRegion(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
-                                        {SUPPORTED_REGIONS.map(r => <option key={r.name} value={r.name}>{r.description} ({r.name})</option>)}
-                                    </select>
+                            <div className="mt-6 space-y-3">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700">Bucket Name</label>
+                                        <input type="text" value={newBucketName} onChange={e => setNewBucketName(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700">Region</label>
+                                        <select value={newBucketRegion} onChange={e => setNewBucketRegion(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
+                                            {SUPPORTED_REGIONS.filter(r => r.gpus.length > 0).map(r => <option key={r.name} value={r.name}>{r.description} ({r.name})</option>)}
+                                        </select>
+                                    </div>
                                 </div>
                                 {createBucketError && <p className="text-red-500 text-sm">{createBucketError}</p>}
-                                <button onClick={handleCreateBucket} disabled={isCreatingBucket || !newBucketName} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">
-                                    {isCreatingBucket && <Spinner />}
-                                    Create Bucket
-                                </button>
+                                <div className="flex justify-end">
+                                    <button onClick={handleCreateBucket} disabled={isCreatingBucket || !newBucketName} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">
+                                        {isCreatingBucket && <Spinner />}
+                                        Create Bucket
+                                    </button>
+                                </div>
                             </div>
                         )}
-                        
-                        <div className="border-t border-gray-200 pt-4 space-y-4">
+                    </div>
+
+                    {/* Model Source */}
+                    <div className="border-b border-gray-200 pb-6">
+                        <h2 className="text-base font-semibold text-gray-800 mb-4">Model Source</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <button
+                                type="button"
+                                onClick={() => { setModelSource('ollama'); setModelId(''); }}
+                                className={`p-4 border rounded-md text-left transition-colors ${modelSource === 'ollama' ? 'border-blue-600 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+                            >
+                                <h3 className="font-medium text-gray-800">Ollama</h3>
+                                <p className="text-xs text-gray-600 mt-1">Fast cold start and fast single-user performance.</p>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { setModelSource('huggingface'); setModelId(''); }}
+                                className={`p-4 border rounded-md text-left transition-colors ${modelSource === 'huggingface' ? 'border-blue-600 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+                            >
+                                <h3 className="font-medium text-gray-800">Hugging Face (vLLM)</h3>
+                                <p className="text-xs text-gray-600 mt-1">Slower cold starts, but better performance for high-traffic use cases.</p>
+                            </button>
+                        </div>
+
+                        {modelSource === 'ollama' && (
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">Model Source</label>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <button
-                                        type="button"
-                                        onClick={() => { setModelSource('huggingface'); setModelId(''); }}
-                                        className={`p-4 border rounded-md text-left transition-colors ${modelSource === 'huggingface' ? 'border-blue-600 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
-                                    >
-                                        <h3 className="font-medium text-gray-800">Hugging Face (vLLM)</h3>
-                                        <p className="text-xs text-gray-600 mt-1">Slower cold starts, but better performance for high-traffic use cases.</p>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => { setModelSource('ollama'); setModelId(''); }}
-                                        className={`p-4 border rounded-md text-left transition-colors ${modelSource === 'ollama' ? 'border-blue-600 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
-                                    >
-                                        <h3 className="font-medium text-gray-800">Ollama</h3>
-                                        <p className="text-xs text-gray-600 mt-1">Fast cold start and fast single-user performance.</p>
-                                    </button>
+                                <label className="block text-sm font-medium text-gray-700">Model ID</label>
+                                <div className="relative">
+                                    <input type="text" value={modelId} onChange={e => setModelId(e.target.value)} placeholder="e.g., gemma3:4b" className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+                                        {isValidating && <ValidationSpinner />}
+                                        {modelExists === true && <CheckIcon />}
+                                        {modelExists === false && validationError && <ErrorIcon />}
+                                    </div>
+                                </div>
+                                {validationError && <p className="text-red-500 text-sm mt-1">{validationError}</p>}
+                                <div className="text-xs text-gray-500 mt-1">
+                                    Suggestions:
+                                    <button type="button" onClick={() => setModelId('gemma3:1b')} className="ml-2 text-blue-600 hover:underline">gemma3:1b</button>
+                                    <button type="button" onClick={() => setModelId('gemma3:4b')} className="ml-2 text-blue-600 hover:underline">gemma3:4b</button>
+                                    <button type="button" onClick={() => setModelId('gemma3:12b')} className="ml-2 text-blue-600 hover:underline">gemma3:12b</button>
                                 </div>
                             </div>
+                        )}
 
-                            {modelSource === 'huggingface' && (
-                                <>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700">Model ID</label>
-                                        <input type="text" value={modelId} onChange={e => setModelId(e.target.value)} placeholder="e.g., google/gemma-3-4b-it" className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                                        <div className="text-xs text-gray-500 mt-1">
-                                            Suggestions:
-                                            <button type="button" onClick={() => setModelId('google/gemma-3-1b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-1b-it</button>
-                                            <button type="button" onClick={() => setModelId('google/gemma-3-4b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-4b-it</button>
-                                            <button type="button" onClick={() => setModelId('google/gemma-3-12b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-12b-it</button>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700">Hugging Face Token (optional)</label>
-                                        <input type="text" value={hfToken} onChange={e => setHfToken(e.target.value)} placeholder="hf_..." className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                                        <p className="text-xs text-gray-500 mt-1">Required for gated models like Llama 3.</p>
-                                    </div>
-                                </>
-                            )}
-
-                            {modelSource === 'ollama' && (
+                        {modelSource === 'huggingface' && (
+                            <div className="space-y-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700">Model ID</label>
-                                    <input type="text" value={modelId} onChange={e => setModelId(e.target.value)} placeholder="e.g., gemma3:4b" className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                    <div className="relative">
+                                        <input type="text" value={modelId} onChange={e => setModelId(e.target.value)} placeholder="e.g., google/gemma-3-4b-it" className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                        <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+                                            {isValidating && <ValidationSpinner />}
+                                            {modelExists === true && <CheckIcon />}
+                                            {modelExists === false && validationError && <ErrorIcon />}
+                                        </div>
+                                    </div>
+                                    {validationError && <p className="text-red-500 text-sm mt-1">{validationError}</p>}
                                     <div className="text-xs text-gray-500 mt-1">
                                         Suggestions:
-                                        <button type="button" onClick={() => setModelId('gemma3:1b')} className="ml-2 text-blue-600 hover:underline">gemma3:1b</button>
-                                        <button type="button" onClick={() => setModelId('gemma3:4b')} className="ml-2 text-blue-600 hover:underline">gemma3:4b</button>
-                                        <button type="button" onClick={() => setModelId('gemma3:12b')} className="ml-2 text-blue-600 hover:underline">gemma3:12b</button>
+                                        <button type="button" onClick={() => setModelId('google/gemma-3-1b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-1b-it</button>
+                                        <button type="button" onClick={() => setModelId('google/gemma-3-4b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-4b-it</button>
+                                        <button type="button" onClick={() => setModelId('google/gemma-3-12b-it')} className="ml-2 text-blue-600 hover:underline">gemma-3-12b-it</button>
                                     </div>
                                 </div>
-                            )}
-
-                            {preflightError && <p className="text-red-500 mt-2">{preflightError}</p>}
-                        </div>
-                    </div>
-                </div>
-
-                {step >= 3 && preflightInfo && (
-                    <div className="bg-white border border-gray-200 rounded-md">
-                        <div className="p-4 border-b"><h2 className="text-base font-medium">Confirmation</h2></div>
-                        <div className="p-4">
-                            <p className="font-medium">Model: <span className="font-normal">{modelId}</span></p>
-                            <p className="font-medium">Total Size: <span className="font-normal">{formatBytes(preflightInfo.totalSize)}</span></p>
-                            <p className="font-medium">File Count: <span className="font-normal">{preflightInfo.files.length}</span></p>
-                        </div>
-                    </div>
-                )}
-
-                {step === 4 && (
-                    <div className="bg-white border border-gray-200 rounded-md">
-                        <div className="p-4 border-b"><h2 className="text-base font-medium">Download Progress</h2></div>
-                        <div className="p-4 space-y-4">
-                            {downloadError && <p className="text-red-500">{downloadError}</p>}
-                            
-                            <div>
-                                <p className="font-medium">Overall Progress: {downloadProgress.totalProgress?.toFixed(2) ?? 0}%</p>
-                                <div className="w-full bg-gray-200 rounded-full h-2.5 mt-1">
-                                    <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${downloadProgress.totalProgress ?? 0}%` }}></div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Hugging Face Token (optional)</label>
+                                    <input type="text" value={hfToken} onChange={e => setHfToken(e.target.value)} placeholder="hf_..." className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                    <p className="text-xs text-gray-500 mt-1">Required for gated models like Llama 3.</p>
                                 </div>
                             </div>
+                        )}
+                    </div>
 
-                            <div className="space-y-2 pt-2 border-t">
-                                {downloadProgress.files?.map(file => (
-                                    <div key={file.name}>
-                                        <p className="font-mono text-sm">{file.name}</p>
-                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                            <div className="bg-green-600 h-2.5 rounded-full" style={{ width: `${(file.downloaded / file.total) * 100}%` }}></div>
+                    {step >= 3 && preflightInfo && (
+                        <div className="border-b border-gray-200 pb-6">
+                            <h2 className="text-base font-semibold text-gray-800 mb-4">Confirmation</h2>
+                            <div className="p-4 bg-gray-50 rounded-md border border-gray-200 text-sm space-y-2">
+                                <p className="font-medium">Model: <span className="font-normal text-gray-700">{modelId}</span></p>
+                                <p className="font-medium">Total Size: <span className="font-normal text-gray-700">{formatBytes(preflightInfo.totalSize)}</span></p>
+                                <p className="font-medium">Est. vRAM Required: <span className="font-normal text-gray-700">~{estimatedVram?.toFixed(2)} GB</span></p>
+                                <div>
+                                    <p className="font-medium">Compatible GPUs in {projectBuckets.find(b => b.name === targetBucket)?.location.toLowerCase()}:</p>
+                                    <ul className="list-disc list-inside pl-2 mt-1 space-y-1">
+                                        {SUPPORTED_REGIONS.find(r => r.name === projectBuckets.find(b => b.name === targetBucket)?.location.toLowerCase())?.gpus.map(gpu => (
+                                            <li key={gpu.name} className="flex items-center">
+                                                {gpu.vram_gb >= (estimatedVram || 0) ? <GreenCheckIcon /> : <RedXIcon />}
+                                                <span className="ml-2 text-gray-700">{gpu.name} ({gpu.vram_gb} GB)</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                {recommendedGpus.length === 0 && (
+                                    <p className="text-yellow-600 font-medium pt-2">Warning: This model may not be deployable in the selected region as no available GPUs meet the estimated vRAM requirement.</p>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {step === 4 && (
+                        <div>
+                            <h2 className="text-base font-semibold text-gray-800 mb-4">Download Progress</h2>
+                            <div className="space-y-4">
+                                {downloadError && <p className="text-red-500">{downloadError}</p>}
+                                
+                                <div>
+                                    <p className="font-medium text-sm">Overall Progress: {downloadProgress.totalProgress?.toFixed(2) ?? 0}%</p>
+                                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-1">
+                                        <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${downloadProgress.totalProgress ?? 0}%` }}></div>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2 pt-2 border-t">
+                                    {downloadProgress.files?.map(file => (
+                                        <div key={file.name}>
+                                            <p className="font-mono text-xs">{file.name}</p>
+                                            <div className="w-full bg-gray-200 rounded-full h-1.5">
+                                                <div className="bg-green-600 h-1.5 rounded-full" style={{ width: `${(file.downloaded / file.total) * 100}%` }}></div>
+                                            </div>
+                                            <p className="text-xs text-gray-600">{formatBytes(file.downloaded)} / {formatBytes(file.total)}</p>
                                         </div>
-                                        <p className="text-sm text-gray-600">{formatBytes(file.downloaded)} / {formatBytes(file.total)}</p>
-                                    </div>
-                                ))}
+                                    ))}
+                                </div>
+                                {downloadProgress.message && <p className="text-sm text-gray-600 italic mt-2">{downloadProgress.message}</p>}
                             </div>
-                            {downloadProgress.message && <p className="text-sm text-gray-600 italic mt-2">{downloadProgress.message}</p>}
                         </div>
-                    </div>
-                )}
+                    )}
 
-                <div className="flex justify-end pt-4">
-                    {step < 3 && <button onClick={handlePreflight} disabled={!targetBucket || !modelId || isPreflighting} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">{isPreflighting && <Spinner />} Check & Continue</button>}
-                    {step === 3 && <button onClick={handleStartDownload} disabled={isDownloading} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">{isDownloading && <Spinner />} Start Download</button>}
+                    <div className="flex justify-end pt-4">
+                        {step === 3 && (
+                            <button onClick={handleDownloadConfirmation} disabled={isDownloading} className={`px-6 py-2 font-medium text-white rounded-md flex items-center ${recommendedGpus.length === 0 ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-blue-600 hover:bg-blue-700'} disabled:bg-gray-400`}>
+                                {isDownloading && <Spinner />}
+                                {recommendedGpus.length > 0 ? 'Start Download' : 'Continue Anyway'}
+                            </button>
+                        )}
+                    </div>
                 </div>
             </div>
         </div>
@@ -555,6 +705,7 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
     
     const regionConfig = SUPPORTED_REGIONS.find(r => r.name === bucket.location.toLowerCase());
     const [gpu, setGpu] = useState(regionConfig?.gpus[0]?.accelerator || '');
+    const [vramWarning, setVramWarning] = useState<string | null>(null);
 
     useEffect(() => {
         const selectedGpuConfig = regionConfig?.gpus.find(g => g.accelerator === gpu);
@@ -562,7 +713,17 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
             setCpu(selectedGpuConfig.validCpus[0]);
             setMemory(selectedGpuConfig.validMemory[0]);
         }
-    }, [gpu, regionConfig?.gpus]);
+
+        if (selectedGpuConfig && model.size) {
+            const estimatedVram = (model.size / (1024 * 1024 * 1024)) * 1.2;
+            if (selectedGpuConfig.vram_gb < estimatedVram) {
+                setVramWarning(`Warning: This model requires an estimated ~${estimatedVram.toFixed(2)} GB of vRAM, but the selected ${selectedGpuConfig.name} only has ${selectedGpuConfig.vram_gb} GB. Deployment may fail or the model may not run correctly.`);
+            } else {
+                setVramWarning(null);
+            }
+        }
+
+    }, [gpu, regionConfig?.gpus, model.size]);
 
     const [gpuZonalRedundancyDisabled, setGpuZonalRedundancyDisabled] = useState(true);
     
@@ -740,7 +901,7 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
             setIsCheckingName(true);
             setServiceNameError(null);
             try {
-                const response = await fetch(`/api/services/exists?projectId=${project.projectId}&region=${bucket.location}&serviceName=${serviceName}`);
+                const response = await fetch(`/api/services/exists?projectId=${project.projectId}&region=${bucket.location.toLowerCase()}&serviceName=${serviceName}`);
                 const data = await response.json();
                 if (data.exists) {
                     setServiceNameError(`Service "${serviceName}" already exists in ${bucket.location}.`);
@@ -808,7 +969,9 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                         }
 
                         if (json.creationStarted) {
-                            onDeploymentStart(json.serviceName, json.region);
+                            setTimeout(() => {
+                                onDeploymentStart(json.serviceName, json.region);
+                            }, 5000); // Wait 5 seconds before redirecting
                             reader.cancel();
                             return;
                         }
@@ -829,77 +992,52 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
     };
 
     return (
-        <div className="p-6">
-            <div className="flex justify-between items-center pb-4 border-b border-gray-200 mb-6">
-                <h1 className="text-xl font-medium text-gray-800">Deploy Model: {model.id}</h1>
-                <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">Cancel</button>
-            </div>
-
-            <div className="space-y-6">
-                {/* Service Details */}
-                <div className="bg-white border border-gray-200 rounded-md">
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">Service Details</h2></div>
-                    <div className="p-4 space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Service Name</label>
-                            <input type="text" value={serviceName} onChange={e => setServiceName(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                            {isCheckingName && <p className="text-sm text-gray-500 mt-1">Checking name...</p>}
-                            {serviceNameError && <p className="text-sm text-red-600 mt-1">{serviceNameError}</p>}
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Region</label>
-                            <p className="mt-1 text-sm text-gray-800">{bucket.location} (locked to model&apos;s region)</p>
-                        </div>
+        <div className="p-6 bg-gray-50 flex-grow">
+            <div className="max-w-4xl mx-auto">
+                <div className="flex justify-between items-center pb-4 mb-6">
+                    <div>
+                        <button onClick={onClose} className="text-sm font-medium text-blue-600 hover:underline mb-2">← Back to Models</button>
+                        <h1 className="text-xl font-medium text-gray-800">Deploy Model: {model.id}</h1>
                     </div>
                 </div>
 
-                {/* Container */}
-                <div className="bg-white border border-gray-200 rounded-md">
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">Container</h2></div>
-                    <div className="p-4 grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Container Image</label>
-                            <input type="text" value={containerImage} onChange={e => setContainerImage(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Container Port</label>
-                            <input type="text" value={containerPort} onChange={e => setContainerPort(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                        </div>
-                    </div>
-                </div>
-
-                {/* Billing & Scaling */}
-                <div className="grid grid-cols-2 gap-6">
-                    <div className="bg-white border border-gray-200 rounded-md">
-                        <div className="p-4 border-b"><h2 className="text-base font-medium">Billing</h2></div>
-                        <div className="p-4">
-                            <p className="text-sm text-gray-800">Instance-based</p>
-                            <p className="text-xs text-gray-500 mt-1">Required when using GPUs.</p>
-                        </div>
-                    </div>
-                    <div className="bg-white border border-gray-200 rounded-md">
-                        <div className="p-4 border-b"><h2 className="text-base font-medium">Service Scaling</h2></div>
-                        <div className="p-4 space-y-3">
-                            <div className="flex items-center space-x-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Min Instances</label>
-                                    <input type="number" value={minInstances} onChange={e => setMinInstances(parseInt(e.target.value, 10))} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Max Instances</label>
-                                    <input type="number" value={maxInstances} onChange={e => setMaxInstances(parseInt(e.target.value, 10))} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
-                                </div>
+                <div className="space-y-8 bg-white border border-gray-200 rounded-md p-6">
+                    {/* Service Details */}
+                    <div className="border-b border-gray-200 pb-6">
+                        <h2 className="text-base font-semibold text-gray-800 mb-4">Service Details</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Service Name</label>
+                                <input type="text" value={serviceName} onChange={e => setServiceName(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                {isCheckingName && <p className="text-sm text-gray-500 mt-1">Checking name...</p>}
+                                {serviceNameError && <p className="text-sm text-red-600 mt-1">{serviceNameError}</p>}
                             </div>
-                            <p className="text-xs text-gray-500">Set a maximum to control costs, and a minimum to reduce cold starts.</p>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Region</label>
+                                <p className="mt-1 text-sm text-gray-800 pt-2">{bucket.location.toLowerCase()} (locked to model&apos;s region)</p>
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                {/* Resources */}
-                <div className="bg-white border border-gray-200 rounded-md">
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">Resources</h2></div>
-                    <div className="p-4">
-                        <div className="grid grid-cols-3 gap-4">
+                    {/* Container */}
+                    <div className="border-b border-gray-200 pb-6">
+                        <h2 className="text-base font-semibold text-gray-800 mb-4">Container</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Container Image</label>
+                                <input type="text" value={containerImage} onChange={e => setContainerImage(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Container Port</label>
+                                <input type="text" value={containerPort} onChange={e => setContainerPort(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Resources & Scaling */}
+                    <div className="border-b border-gray-200 pb-6">
+                        <h2 className="text-base font-semibold text-gray-800 mb-4">Resources & Scaling</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">GPU</label>
                                 <select value={gpu} onChange={e => setGpu(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
@@ -909,6 +1047,7 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                                         </option>
                                     ))}
                                 </select>
+                                {vramWarning && <p className="text-sm text-yellow-600 mt-2">{vramWarning}</p>}
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">vCPUs</label>
@@ -923,104 +1062,112 @@ const DeployServiceView = ({ project, model, bucket, onClose, onDeploymentStart 
                                 </select>
                             </div>
                         </div>
-                        <div className="mt-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                             <div>
+                                <label className="block text-sm font-medium text-gray-700">Min Instances</label>
+                                <input type="number" value={minInstances} onChange={e => setMinInstances(parseInt(e.target.value, 10))} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Max Instances</label>
+                                <input type="number" value={maxInstances} onChange={e => setMaxInstances(parseInt(e.target.value, 10))} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                            </div>
+                        </div>
+                         <div className="mt-4">
                             <label className="flex items-center">
                                 <input type="checkbox" checked={gpuZonalRedundancyDisabled} onChange={e => setGpuZonalRedundancyDisabled(e.target.checked)} className="form-checkbox" />
                                 <span className="ml-2 text-sm text-gray-700">Disable GPU zonal redundancy (cost saving)</span>
                             </label>
                         </div>
                     </div>
-                </div>
 
-                {/* VPC Networking */}
-                <div className="bg-white border border-gray-200 rounded-md">
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">VPC Networking</h2></div>
-                    <div className="p-4 space-y-4">
-                        <label className="flex items-center">
-                            <input type="checkbox" checked={useVpc} onChange={e => setUseVpc(e.target.checked)} className="form-checkbox" />
-                            <span className="ml-2 text-sm text-gray-700">Connect to VPC for faster model loading</span>
-                        </label>
-                        
-                        {useVpc && (
-                            isLoadingSubnets ? <p className="text-sm text-gray-500">Loading subnets...</p> :
-                            subnets.length > 0 ? (
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Subnetwork</label>
-                                    <select value={selectedSubnet} onChange={e => setSelectedSubnet(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
-                                        {subnets.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
-                                    </select>
-                                    {!isSubnetPgaEnabled && (
-                                        <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-800 flex items-center justify-between">
-                                            <span>This subnet does not have Private Google Access enabled, which is required.</span>
-                                            <button onClick={handleEnablePga} className="px-2 py-1 text-xs font-medium text-white bg-red-600 rounded-md hover:bg-red-700">Enable</button>
+                                        {/* VPC Networking */}
+                                        <div className="border-b border-gray-200 pb-6">
+                                            <h2 className="text-base font-semibold text-gray-800 mb-4">Networking</h2>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                <div>
+                                                    <label className="flex items-center">
+                                                        <input type="checkbox" checked={useVpc} onChange={e => setUseVpc(e.target.checked)} className="form-checkbox" />
+                                                        <span className="ml-2 text-sm text-gray-700">Connect to VPC for faster model loading</span>
+                                                    </label>
+                                                    {useVpc && (
+                                                        isLoadingSubnets ? <p className="text-sm text-gray-500 mt-2">Loading subnets...</p> : 
+                                                        subnets.length > 0 ? (
+                                                            <div className="mt-2">
+                                                                <label className="block text-sm font-medium text-gray-700">Subnetwork</label>
+                                                                <select value={selectedSubnet} onChange={e => setSelectedSubnet(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md">
+                                                                    {subnets.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                                                                </select>
+                                                                {!isSubnetPgaEnabled && (
+                                                                    <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-800 flex items-center justify-between">
+                                                                        <span>Private Google Access is required.</span>
+                                                                        <button onClick={handleEnablePga} className="px-2 py-1 text-xs font-medium text-white bg-red-600 rounded-md hover:bg-red-700">Enable</button>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        ) : (
+                                                            <p className="text-sm text-gray-500 mt-2">No VPC subnets found in {bucket.location.toLowerCase()}.</p>
+                                                        )
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
-                                    )}
-                                </div>
-                            ) : (
-                                <p className="text-sm text-gray-500">No VPC subnets found in {bucket.location}. VPC cannot be used.</p>
-                            )
-                        )}
-                    </div>
-                </div>
-
-                {/* Volume Mount */}
-                <div className="bg-white border border-gray-200 rounded-md">
-                    <div className="p-4 border-b"><h2 className="text-base font-medium">Volume Mounts</h2></div>
-                    <div className="p-4">
-                        <div className="flex items-center justify-between text-sm">
-                            <p className="font-medium text-gray-800">gcs-bucket (read-only)</p>
-                            <p className="font-mono text-gray-600">{`/gcs/${bucket.name}`}</p>
+                    
+                                        {/* Volume Mount */}
+                                        <div className="border-b border-gray-200 pb-6">
+                                            <h2 className="text-base font-semibold text-gray-800 mb-4">Storage</h2>
+                                             <div>
+                                                <label className="block text-sm font-medium text-gray-700">Volume Mount</label>
+                                                <p className="font-mono text-sm text-gray-600 mt-2 p-2 border border-gray-200 bg-gray-50 rounded-md">{`/gcs/${bucket.name}`}</p>
+                                            </div>
+                                        </div>
+                    
+                                        {/* Container Arguments */}
+                                        <div className="border-b border-gray-200 pb-6">
+                                            <h2 className="text-base font-semibold text-gray-800 mb-4">Container Arguments</h2>
+                                            <div className="space-y-2">
+                                                {args.map(arg => (
+                                                    <div key={arg.id} className="flex items-center space-x-2">
+                                                        <input type="text" value={arg.key} onChange={e => handleArgChange(arg.id, 'key', e.target.value)} className="w-1/3 p-1 border border-gray-300 rounded-md text-sm" readOnly={arg.key === '--model'} />
+                                                        <input type="text" value={arg.value} onChange={e => handleArgChange(arg.id, 'value', e.target.value)} className="flex-1 p-1 border border-gray-300 rounded-md text-sm" readOnly={arg.key === '--model'} />
+                                                        <button onClick={() => removeArg(arg.id)} disabled={arg.key === '--model'} className="text-red-500 hover:text-red-700 disabled:text-gray-300 text-xs">Remove</button>
+                                                    </div>
+                                                ))}
+                                                <button onClick={addArg} className="text-sm text-blue-600 hover:underline pt-2">Add Argument</button>
+                                            </div>
+                                        </div>
+                    
+                                        {/* Environment Variables */}
+                                        <div>
+                                            <h2 className="text-base font-semibold text-gray-800 mb-4">Environment Variables</h2>
+                                            <div className="space-y-2">
+                                                {envVars.map(env => (
+                                                    <div key={env.id} className="flex items-center space-x-2">
+                                                        <input type="text" value={env.key} onChange={e => handleEnvVarChange(env.id, 'key', e.target.value)} className="w-1/3 p-1 border border-gray-300 rounded-md text-sm" />
+                                                        <input type="text" value={env.value} onChange={e => handleEnvVarChange(env.id, 'value', e.target.value)} className="flex-1 p-1 border border-gray-300 rounded-md text-sm" />
+                                                        <button onClick={() => removeEnvVar(env.id)} className="text-red-500 hover:text-red-700 text-xs">Remove</button>
+                                                    </div>
+                                                ))}
+                                                <button onClick={addEnvVar} className="text-sm text-blue-600 hover:underline pt-2">Add Variable</button>
+                                            </div>
+                                        </div>
+                                        
+                                        {deployError && <p className="text-red-500 mt-4">{deployError}</p>}
+                    
+                    {deployProgress.length > 0 && (
+                        <div className="mt-6">
+                             <h2 className="text-base font-semibold text-gray-800 mb-4">Deployment Progress</h2>
+                            <div className="p-4 font-mono text-xs h-64 overflow-y-auto bg-gray-900 text-white rounded-b-md">
+                                {deployProgress.map((p, i) => <p key={i}>{'message' in p ? p.message : 'error' in p ? p.error : JSON.stringify(p)}</p>)}
+                            </div>
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">The GCS bucket containing the model will be mounted into the container.</p>
-                    </div>
-                </div>
+                    )}
 
-                {/* Arguments & Env Vars */}
-                <div className="grid grid-cols-2 gap-6">
-                    <div className="bg-white border border-gray-200 rounded-md">
-                        <div className="p-4 border-b"><h2 className="text-base font-medium">Container Arguments</h2></div>
-                        <div className="p-4 space-y-2">
-                            {args.map(arg => (
-                                <div key={arg.id} className="flex items-center space-x-2">
-                                    <input type="text" value={arg.key} onChange={e => handleArgChange(arg.id, 'key', e.target.value)} className="w-1/3 p-1 border border-gray-300 rounded-md text-sm" readOnly={arg.key === '--model'} />
-                                    <input type="text" value={arg.value} onChange={e => handleArgChange(arg.id, 'value', e.target.value)} className="flex-1 p-1 border border-gray-300 rounded-md text-sm" readOnly={arg.key === '--model'} />
-                                    <button onClick={() => removeArg(arg.id)} disabled={arg.key === '--model'} className="text-red-500 hover:text-red-700 disabled:text-gray-300">Remove</button>
-                                </div>
-                            ))}
-                            <button onClick={addArg} className="text-sm text-blue-600 hover:underline mt-2">Add Argument</button>
-                        </div>
+                    <div className="flex justify-end pt-8">
+                        <button onClick={handleDeploy} disabled={isDeploying || !!serviceNameError || isCheckingName} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">
+                            {isDeploying && <Spinner />}
+                            Deploy
+                        </button>
                     </div>
-                    <div className="bg-white border border-gray-200 rounded-md">
-                        <div className="p-4 border-b"><h2 className="text-base font-medium">Environment Variables</h2></div>
-                        <div className="p-4 space-y-2">
-                             {envVars.map(env => (
-                                <div key={env.id} className="flex items-center space-x-2">
-                                    <input type="text" value={env.key} onChange={e => handleEnvVarChange(env.id, 'key', e.target.value)} className="w-1/3 p-1 border border-gray-300 rounded-md text-sm" />
-                                    <input type="text" value={env.value} onChange={e => handleEnvVarChange(env.id, 'value', e.target.value)} className="flex-1 p-1 border border-gray-300 rounded-md text-sm" />
-                                    <button onClick={() => removeEnvVar(env.id)} className="text-red-500 hover:text-red-700">Remove</button>
-                                </div>
-                            ))}
-                            <button onClick={addEnvVar} className="text-sm text-blue-600 hover:underline mt-2">Add Variable</button>
-                        </div>
-                    </div>
-                </div>
-                
-                {deployError && <p className="text-red-500 mt-4">{deployError}</p>}
-
-                {deployProgress.length > 0 && (
-                    <div className="bg-white border border-gray-200 rounded-md">
-                        <div className="p-4 border-b"><h2 className="text-base font-medium">Deployment Progress</h2></div>
-                        <div className="p-4 font-mono text-xs h-64 overflow-y-auto bg-gray-900 text-white rounded-b-md">
-                            {deployProgress.map((p, i) => <p key={i}>{'message' in p ? p.message : 'error' in p ? p.error : JSON.stringify(p)}</p>)}
-                        </div>
-                    </div>
-                )}
-
-                <div className="flex justify-end pt-4">
-                    <button onClick={handleDeploy} disabled={isDeploying || !!serviceNameError || isCheckingName} className="px-6 py-2 font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 flex items-center">
-                        {isDeploying && <Spinner />}
-                        Deploy
-                    </button>
                 </div>
             </div>
         </div>
