@@ -796,6 +796,31 @@ const ImportModelView = ({ project, onClose, onDownloadStart }: { project: Proje
                         )}
                     </div>
 
+                    {step >= 3 && preflightInfo && (
+                        <div className="border-b border-gray-200 pb-6">
+                            <h2 className="text-base font-semibold text-gray-800 mb-4">Confirmation</h2>
+                            <div className="p-4 bg-gray-50 rounded-md border border-gray-200 text-sm space-y-2">
+                                <p className="font-medium">Model: <span className="font-normal text-gray-700">{modelId}</span></p>
+                                <p className="font-medium">Total Size: <span className="font-normal text-gray-700">{formatBytes(preflightInfo.totalSize)}</span></p>
+                                <p className="font-medium">Est. vRAM Required: <span className="font-normal text-gray-700">~{estimatedVram?.toFixed(2)} GB</span></p>
+                                <div>
+                                    <p className="font-medium">Compatible GPUs in {projectBuckets.find(b => b.name === targetBucket)?.location.toLowerCase()}:</p>
+                                    <ul className="list-disc list-inside pl-2 mt-1 space-y-1">
+                                        {SUPPORTED_REGIONS.find(r => r.name === projectBuckets.find(b => b.name === targetBucket)?.location.toLowerCase())?.gpus.map(gpu => (
+                                            <li key={gpu.name} className="flex items-center">
+                                                {gpu.vram_gb >= (estimatedVram || 0) ? <GreenCheckIcon /> : <RedXIcon />}
+                                                <span className="ml-2 text-gray-700">{gpu.name} ({gpu.vram_gb} GB)</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                {recommendedGpus.length === 0 && (
+                                    <p className="text-yellow-600 font-medium pt-2">Warning: This model may not be deployable in the selected region as no available GPUs meet the estimated vRAM requirement.</p>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                     {submitError && <p className="text-red-500">{submitError}</p>}
 
                     <div className="flex justify-end pt-4">
