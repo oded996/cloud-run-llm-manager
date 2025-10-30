@@ -109,10 +109,11 @@ const Services = ({ selectedProject }: { selectedProject: Project | null }) => {
   }, [selectedProject, cacheKey]);
 
   useEffect(() => {
-    if (!selectedProject || !cacheKey) {
-      setIsLoading(false);
+    if (!selectedProject) {
+      setIsLoading(true);
       return;
     }
+    const cacheKey = `llm_manager_services_cache_${selectedProject.projectId}`;
     const cachedData = localStorage.getItem(cacheKey);
     if (cachedData) {
         setServices(JSON.parse(cachedData));
@@ -121,11 +122,11 @@ const Services = ({ selectedProject }: { selectedProject: Project | null }) => {
         setIsLoading(true);
     }
     fetchServices();
-  }, [selectedProject, cacheKey, fetchServices]);
+  }, [selectedProject, fetchServices]);
 
-  const handleSwitchToServices = (serviceName: string, region: string) => {
-    router.push(`/?view=services&service=${serviceName}&region=${region}`);
-  };
+  if (!selectedProject) {
+    return <div className="p-6">Loading project...</div>;
+  }
 
   if (editingService) {
     return (
@@ -342,6 +343,7 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
     const consoleUrl = `https://console.cloud.google.com/run/detail/${region}/${serviceName}/revisions?project=${project.projectId}`;
     const container = service.template.containers[0];
     const modelSource = container?.image?.includes('ollama') ? 'ollama' : 'huggingface';
+    const configuredModel = container?.env?.find(e => e.name === 'MODEL')?.value;
 
     const renderTabContent = () => {
         switch (activeTab) {
@@ -372,7 +374,7 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
                 return <PermissionsCard project={project} region={region} serviceName={serviceName} />;
             case 'chat':
                 if (status === 'Running' && service.uri) {
-                    return <ChatCard serviceUrl={service.uri} modelSource={modelSource} />;
+                    return <ChatCard serviceUrl={service.uri} modelSource={modelSource} configuredModel={configuredModel} />;
                 }
                 return <p className="text-center text-gray-500 py-8">Service must be running to use the chat.</p>;
             default:

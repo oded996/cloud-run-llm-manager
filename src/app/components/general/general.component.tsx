@@ -20,12 +20,11 @@ interface GeneralProps {
 const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [draftSelectedProject, setDraftSelectedProject] = useState<string>('');
+  const [draftSelectedProject, setDraftSelectedProject] = useState<string>(selectedProject?.projectId || '');
   const [canListProjects, setCanListProjects] = useState(true);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
-  const [isLoadingInitialData, setIsLoadingInitialData] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isEditingProject, setIsEditingProject] = useState(false);
+  const [isEditingProject, setIsEditingProject] = useState(!selectedProject);
   const [isProjectLocked, setIsProjectLocked] = useState(false);
 
   const [apiStatus, setApiStatus] = useState<{ [key: string]: boolean | null }>({
@@ -64,43 +63,13 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
   // Effect to load initial data on mount
   useEffect(() => {
     const loadInitialData = async () => {
-      setIsLoadingInitialData(true);
-
+      // Check if the project is locked by an environment variable
       const envResponse = await fetch('/api/project/env');
       const envData = await envResponse.json();
+      setIsProjectLocked(envData.isProjectLocked);
 
-      if (envData.isProjectLocked) {
-        setIsProjectLocked(true);
-        setIsEditingProject(false);
-        onProjectSelect({ projectId: envData.lockedProjectId, name: envData.lockedProjectId });
-        // Attempt to fetch full details, but don't block on it
-        fetch(`/api/project/details?projectId=${encodeURIComponent(envData.lockedProjectId)}`)
-          .then(res => res.ok && res.json())
-          .then(details => onProjectSelect(details))
-          .catch(err => console.error("Couldn't fetch locked project details, using ID as name.", err));
-      } else {
-        setIsProjectLocked(false);
-        const savedProjectId = localStorage.getItem('selectedProject');
-        if (savedProjectId) {
-          try {
-            const response = await fetch(`/api/project/details?projectId=${encodeURIComponent(savedProjectId)}`);
-            if (response.ok) {
-              const projectDetails = await response.json();
-              onProjectSelect(projectDetails);
-              setDraftSelectedProject(projectDetails.projectId);
-              setIsEditingProject(false);
-            } else {
-              localStorage.removeItem('selectedProject');
-              setIsEditingProject(true);
-            }
-          } catch (error) {
-            console.error('Failed to fetch saved project details:', error);
-            localStorage.removeItem('selectedProject');
-            setIsEditingProject(true);
-          }
-        } else {
-          setIsEditingProject(true);
-        }
+      if (!selectedProject && !envData.isProjectLocked) {
+        setIsEditingProject(true);
         fetchInitialProjects();
       }
 
@@ -109,12 +78,10 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
         const response = await fetch('/api/project/identity');
         if (response.ok) setIdentity(await response.json());
       } catch (error) { console.error('Error fetching identity:', error); }
-      
-      setIsLoadingInitialData(false);
     };
 
     loadInitialData();
-  }, [onProjectSelect]);
+  }, [selectedProject]);
 
   // Debounced effect for searching projects
   useEffect(() => {
@@ -289,7 +256,7 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
             </div>
           ) : (
             <div className="flex items-center justify-between">
-              {isLoadingInitialData ? <p className="text-sm text-gray-500">Loading project...</p> : selectedProject ? (
+              {selectedProject ? (
                 <div className="flex items-center">
                   <svg className="w-5 h-5 text-green-600 mr-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"></path></svg>
                   <div className="text-sm">
@@ -298,7 +265,7 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
                   </div>
                 </div>
               ) : <p className="text-sm text-gray-500">Select a project</p>}
-              <button onClick={() => setIsEditingProject(true)} className="text-sm font-medium text-blue-600 hover:underline">Change</button>
+              <button onClick={() => { setIsEditingProject(true); fetchInitialProjects(); }} className="text-sm font-medium text-blue-600 hover:underline">Change</button>
             </div>
           )}
         </div>

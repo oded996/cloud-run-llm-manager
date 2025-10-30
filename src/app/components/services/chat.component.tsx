@@ -15,7 +15,7 @@ interface Message {
   content: string;
 }
 
-export const ChatCard = ({ serviceUrl, modelSource }: { serviceUrl: string, modelSource: 'ollama' | 'huggingface' }) => {
+export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { serviceUrl: string, modelSource: 'ollama' | 'huggingface', configuredModel?: string }) => {
   const [models, setModels] = useState<any[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [isLoadingModels, setIsLoadingModels] = useState(true);
@@ -57,7 +57,14 @@ export const ChatCard = ({ serviceUrl, modelSource }: { serviceUrl: string, mode
 
         setModels(loadedModels);
         if (loadedModels.length > 0) {
-          setSelectedModel(loadedModels[0].id);
+          // If a configured model is provided and it exists in the list, select it.
+          // Otherwise, default to the first model.
+          const modelExists = loadedModels.some((m: Model) => m.id === configuredModel);
+          if (configuredModel && modelExists) {
+            setSelectedModel(configuredModel);
+          } else {
+            setSelectedModel(loadedModels[0].id);
+          }
         }
 
       } catch (error) {
@@ -68,7 +75,7 @@ export const ChatCard = ({ serviceUrl, modelSource }: { serviceUrl: string, mode
     };
 
     fetchModels();
-  }, [serviceUrl, modelSource]);
+  }, [serviceUrl, modelSource, configuredModel]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

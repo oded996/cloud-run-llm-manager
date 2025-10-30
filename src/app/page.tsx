@@ -12,20 +12,75 @@ function HomeContent() {
   const searchParams = useSearchParams();
   const viewFromUrl = searchParams.get('view') as View | null;
 
-  const [activeView, setActiveView] = useState<View>(viewFromUrl || 'general');
+  const [activeView, setActiveView] = useState<View>('general');
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [viewKey, setViewKey] = useState(0);
+  const [isProjectLoading, setIsProjectLoading] = useState(true);
+
+  // Centralized project initialization
+  useEffect(() => {
+    const initializeProject = async () => {
+      setIsProjectLoading(true);
+      
+      // Check for a project locked by environment variables first
+      const envResponse = await fetch('/api/project/env');
+      const envData = await envResponse.json();
+
+      if (envData.isProjectLocked && envData.lockedProjectId) {
+        try {
+          const detailsResponse = await fetch(`/api/project/details?projectId=${encodeURIComponent(envData.lockedProjectId)}`);
+          if (detailsResponse.ok) {
+            setSelectedProject(await detailsResponse.json());
+          } else {
+            setSelectedProject({ projectId: envData.lockedProjectId, name: envData.lockedProjectId });
+          }
+        } catch (error) {
+          console.error('Failed to fetch locked project details:', error);
+          setSelectedProject({ projectId: envData.lockedProjectId, name: envData.lockedProjectId });
+        }
+      } else {
+        // If not locked, check local storage
+        const savedProjectId = localStorage.getItem('selectedProject');
+        if (savedProjectId) {
+          try {
+            const detailsResponse = await fetch(`/api/project/details?projectId=${encodeURIComponent(savedProjectId)}`);
+            if (detailsResponse.ok) {
+              setSelectedProject(await detailsResponse.json());
+            } else {
+              localStorage.removeItem('selectedProject'); // Clear invalid project
+            }
+          } catch (error) {
+            console.error('Failed to fetch saved project details:', error);
+            localStorage.removeItem('selectedProject');
+          }
+        }
+      }
+      setIsProjectLoading(false);
+    };
+    initializeProject();
+  }, []);
 
   useEffect(() => {
-    if (viewFromUrl && viewFromUrl !== activeView) {
-      setActiveView(viewFromUrl);
+    // Set initial view from URL, but only after project loading is settled
+    if (!isProjectLoading) {
+      setActiveView(viewFromUrl || 'general');
     }
-  }, [viewFromUrl, activeView]);
+  }, [viewFromUrl, isProjectLoading]);
 
-  const handleViewChange = (view: View) => {
-    setActiveView(view);
-    setViewKey(prevKey => prevKey + 1);
+  const renderContent = () => {
+    if (isProjectLoading) {
+        return <div className="p-6">Loading project...</div>;
+    }
+    switch (activeView) {
+        case 'general':
+            return <General selectedProject={selectedProject} onProjectSelect={setSelectedProject} />;
+        case 'models':
+            return <Models selectedProject={selectedProject} />;
+        case 'services':
+            return <Services selectedProject={selectedProject} />;
+        default:
+            return <General selectedProject={selectedProject} onProjectSelect={setSelectedProject} />;
+    }
   };
 
   return (
@@ -38,9 +93,7 @@ function HomeContent() {
           onToggleCollapse={() => setSidebarCollapsed(!isSidebarCollapsed)}
         />
         <div className="flex-1">
-          {activeView === 'general' && <General selectedProject={selectedProject} onProjectSelect={setSelectedProject} />}
-          {activeView === 'models' && <Models key={viewKey} selectedProject={selectedProject} />}
-          {activeView === 'services' && <Services key={viewKey} selectedProject={selectedProject} />}
+          {renderContent()}
         </div>
       </main>
     </div>
