@@ -78,13 +78,11 @@ Project: Cloud Run LLM Manager
     *   `GET`: Lists all GCS buckets in the project and checks for the `llm-manager-metadata.json` file to identify which ones to display.
     *   `POST`: Creates a new GCS bucket in the specified region and initializes it with an empty `llm-manager-metadata.json` file.
 *   **Model Import APIs (`/api/models/import`):**
-    *   The backend includes separate API routes for Hugging Face (`/api/models/import/*`) and Ollama (`/api/models/import/ollama/*`).
+    *   The backend uses Google Cloud Build to provide a robust and observable model download process. It includes separate API routes and Cloud Build templates (`huggingface.yaml`, `ollama.yaml`) for Hugging Face and Ollama.
     *   **Pre-flight:** Contacts the external model hub (Hugging Face Hub or Ollama OCI Registry) to get metadata, file lists, and total size.
-    *   **Start:** This is the main download endpoint.
-        *   It streams files directly from the source to a temporary location in the target GCS bucket.
-        *   For Ollama, it creates the specific OCI-compliant directory structure (`/blobs/sha256-<hash>`) required by the Ollama container.
-        *   It uses Server-Sent Events (SSE) to stream real-time progress updates back to the frontend.
-        *   Upon successful download, it updates the `llm-manager-metadata.json` file in the bucket.
+    *   **Start:** This endpoint submits a job to Cloud Build, passing the model ID, bucket, and optional HF Token as substitutions. It immediately updates the `llm-manager-metadata.json` file to set the model's status to "downloading" and stores the `buildId`.
+    *   **Status:** A new endpoint (`/api/models/import/status/[buildId]`) allows the frontend to poll for the status of a running build, streaming back the Cloud Build logs. When the build completes, this endpoint is responsible for updating the model's status to "completed" or "failed" in the metadata file.
+    *   **Bulk Status:** Another endpoint (`/api/models/import/bulk-status`) allows the frontend to check the status of all "downloading" models at once to keep the main list view up-to-date.
 *   **Permission Management:**
     *   When a model is selected for deployment (in CUJ 3), the system will verify that the Cloud Run service's identity has `Storage Object Viewer` permissions on the model's GCS bucket.
     *   The UI will offer a one-click "Grant Access" button to simplify this IAM binding.
@@ -164,3 +162,17 @@ This workflow begins when the user clicks the "Deploy" button for an Ollama mode
 *   **Theme:** Use Google's standard color palette, fonts, and component styles.
 *   **Components:** Utilize clean tables, simple forms, modals, and consistent button styling.
 *   **Feedback:** Provide clear loading indicators and toast/inline notifications for success or error states.
+
+## 5. Alternatives Considered
+
+### Direct Backend Download (Initial Approach)
+
+The initial implementation for model downloads involved the manager's backend API directly streaming files from the model source (e.g., Hugging Face) to the target GCS bucket.
+
+*   **Mechanism:** The `/api/models/import/start` endpoint would initiate a `fetch` request to the model provider. It then piped the response body directly to a GCS write stream. Progress was reported back to the client using Server-Sent Events (SSE).
+*   **Drawbacks:**
+    *   **Resource Intensive:** This approach required the manager service to have enough memory and CPU to handle the entire file stream. For very large models (e.g., 60GB+), this could cause the service to crash or require it to be deployed with a large, expensive instance type.
+    *   **Fragile:** A network interruption or a crash in the manager service would cause the entire download to fail, with no easy way to resume.
+    *   **Lack of Observability:** It was difficult to monitor the progress of a download if the user navigated away from the page.
+    *   **Not Using Native Tooling:** It did not use the official `huggingface_hub` or `ollama` libraries, which are optimized for downloading models.
+*   **Reason for Change:** The Cloud Build approach was adopted because it offloads the entire download process to a dedicated, managed service. This is more scalable, robust, and provides excellent observability through Cloud Build's native logging and history features, while keeping the manager service itself lightweight.

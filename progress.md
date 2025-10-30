@@ -11,6 +11,32 @@ This document serves as a running changelog to track the progress of the Cloud R
 - **Be Specific but Concise:** Briefly describe each change. For bugs, include a short summary of the issue and the solution.
 - **Update Chronologically:** Always add the newest entries at the top of the file.
 
+## 2025-10-30
+
+### Implemented Features
+
+- **Cloud Build for Model Downloads:**
+    - Refactored the entire model download process to use Cloud Build instead of a direct backend stream. This makes the process more robust, scalable, and observable, and uses significantly fewer resources in the manager service itself.
+    - Created `cloudbuild.yaml` templates for both Hugging Face and Ollama downloads.
+- **Download Progress View:**
+    - Implemented a dedicated UI screen to show the real-time status and logs of an in-progress Cloud Build download.
+    - The main models list now shows a "View Progress" button for any models in a "downloading" state.
+- **Background Status Checks:**
+    - Created a new `/api/models/import/bulk-status` endpoint to check the status of multiple in-progress downloads.
+    - The models list now automatically polls this endpoint in the background to update the status of models from "downloading" to "completed" or "failed".
+
+### Bug Fixes & UX Improvements
+
+- **Cloud Build & Deployment Fixes:**
+    - Resolved a series of `INVALID_ARGUMENT` errors in the Cloud Build configuration related to secret handling, substitution variables (`$PATH`, `$HOME`), and command invocation (`huggingface-cli` vs. `hf`).
+    - Corrected the `OLLAMA_MODELS` environment variable path in the deployment configuration to fix "read-only file system" errors at runtime.
+    - Increased the startup probe timeout for vLLM services to prevent premature instance termination when loading large models.
+- **UI Regressions & Fixes:**
+    - Restored the pre-download "Confirmation" step that shows model size and GPU compatibility.
+    - Fixed a bug where models in a "downloading" state were not appearing in the models list.
+    - Implemented auto-scrolling for the log viewer in the progress screen.
+    - Resolved multiple build-time and runtime TypeScript errors.
+
 ## 2025-10-29 (Final Session)
 
 ### Implemented Features

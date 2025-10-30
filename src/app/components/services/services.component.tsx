@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Project, Tooltip } from '../general/general.component';
 import { PermissionsCard } from './permissions.component';
 import { ChatCard } from './chat.component';
@@ -66,32 +67,23 @@ const RefreshIcon = ({ isRefreshing }: { isRefreshing: boolean }) => (
     </svg>
 );
 
-const Services = ({ selectedProject, initialService, onSwitchToServices }: { selectedProject: Project | null, initialService: { name: string, region: string } | null, onSwitchToServices: (serviceName: string, region: string) => void }) => {
+const Services = ({ selectedProject }: { selectedProject: Project | null }) => {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const serviceNameFromUrl = searchParams.get('service');
+  const regionFromUrl = searchParams.get('region');
+
   const [services, setServices] = useState<Service[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [editingService, setEditingService] = useState<Service | null>(null);
 
   const cacheKey = selectedProject ? `llm_manager_services_cache_${selectedProject.projectId}` : null;
 
   useEffect(() => {
-    setSelectedService(null);
     setEditingService(null);
   }, [selectedProject]);
-
-  useEffect(() => {
-    if (initialService && selectedProject) {
-      const partialService = {
-        name: `projects/${selectedProject.projectId}/locations/${initialService.region}/services/${initialService.name}`,
-        uid: '', uri: '', reconciling: true, updateTime: new Date().toISOString(), lastModifier: '',
-        latestCreatedRevision: '', latestReadyRevision: ' ',
-        template: { containers: [] }, terminalCondition: { type: '', state: '' }, conditions: [],
-      };
-      setSelectedService(partialService);
-    }
-  }, [initialService, selectedProject]);
 
   const fetchServices = useCallback(async () => {
     if (!selectedProject || !cacheKey) {
@@ -131,6 +123,10 @@ const Services = ({ selectedProject, initialService, onSwitchToServices }: { sel
     fetchServices();
   }, [selectedProject, cacheKey, fetchServices]);
 
+  const handleSwitchToServices = (serviceName: string, region: string) => {
+    router.push(`/?view=services&service=${serviceName}&region=${region}`);
+  };
+
   if (editingService) {
     return (
         <DeployServiceView
@@ -138,14 +134,15 @@ const Services = ({ selectedProject, initialService, onSwitchToServices }: { sel
             model={{ id: '', source: 'huggingface', status: 'completed', downloadedAt: '', size: 0 }} // Dummy model
             bucket={{ name: '', location: '', models: [] }} // Dummy bucket
             onClose={() => setEditingService(null)}
-            onDeploymentStart={onSwitchToServices}
+            onDeploymentStart={handleSwitchToServices}
             existingService={editingService}
         />
     );
   }
 
-  if (selectedService) {
-    return <ServiceDetailView project={selectedProject!} initialService={selectedService} onBack={() => setSelectedService(null)} onEdit={setEditingService} />;
+  if (serviceNameFromUrl && regionFromUrl && selectedProject) {
+    const serviceFullName = `projects/${selectedProject.projectId}/locations/${regionFromUrl}/services/${serviceNameFromUrl}`;
+    return <ServiceDetailView project={selectedProject} serviceFullName={serviceFullName} onBack={() => router.push('/?view=services')} onEdit={setEditingService} />;
   }
 
   return (
@@ -196,7 +193,7 @@ const Services = ({ selectedProject, initialService, onSwitchToServices }: { sel
                 return (
                   <tr key={service.uid} className="border-b border-gray-200 last:border-b-0 hover:bg-gray-50">
                     <td className="p-3">
-                      <button onClick={() => setSelectedService(service)} className="text-blue-600 font-medium hover:underline">{serviceName}</button>
+                      <button onClick={() => router.push(`/?view=services&service=${serviceName}&region=${region}`)} className="text-blue-600 font-medium hover:underline">{serviceName}</button>
                     </td>
                     <td className="p-3">
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
@@ -218,11 +215,15 @@ const Services = ({ selectedProject, initialService, onSwitchToServices }: { sel
   );
 };
 
-const ServiceDetailView = ({ project, initialService, onBack, onEdit }: { project: Project, initialService: Service, onBack: () => void, onEdit: (service: Service) => void }) => {
-    type Tab = 'details' | 'logs' | 'permissions' | 'chat';
-    const [activeTab, setActiveTab] = useState<Tab>('details');
+const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { project: Project, serviceFullName: string, onBack: () => void, onEdit: (service: Service) => void }) => {
+    const router = useRouter();
+    const searchParams = useSearchParams();
+    const tabFromUrl = searchParams.get('tab') as Tab | null;
 
-    const [service, setService] = useState<Service>(initialService);
+    type Tab = 'details' | 'logs' | 'permissions' | 'chat';
+    const [activeTab, setActiveTab] = useState<Tab>(tabFromUrl || 'details');
+
+    const [service, setService] = useState<Service | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     
@@ -232,10 +233,11 @@ const ServiceDetailView = ({ project, initialService, onBack, onEdit }: { projec
     const logContainerRef = useRef<HTMLDivElement>(null);
     const lastLogTimestamp = useRef<string | null>(null);
 
-    const region = initialService.name.split('/')[3];
-    const serviceName = initialService.name.split('/')[5];
+    const region = serviceFullName.split('/')[3];
+    const serviceName = serviceFullName.split('/')[5];
 
-    const getStatus = (service: Service) => {
+    const getStatus = (service: Service | null) => {
+        if (!service) return 'Loading';
         if (service.reconciling || service.latestCreatedRevision !== service.latestReadyRevision) return 'Deploying';
         const readyCondition = service.terminalCondition;
         if (readyCondition?.type === 'Ready' && readyCondition?.state === 'CONDITION_SUCCEEDED') return 'Running';
@@ -329,6 +331,15 @@ const ServiceDetailView = ({ project, initialService, onBack, onEdit }: { projec
         }
     }, [activeTab, fetchLogs]);
 
+    const handleTabChange = (tab: Tab) => {
+        setActiveTab(tab);
+        router.push(`/?view=services&service=${serviceName}&region=${region}&tab=${tab}`);
+    };
+
+    if (!service) {
+        return <div className="p-6">{isLoading ? <p>Loading service details...</p> : <p className="text-red-500">{error || 'Service not found.'}</p>}</div>;
+    }
+
     const consoleUrl = `https://console.cloud.google.com/run/detail/${region}/${serviceName}/revisions?project=${project.projectId}`;
     const container = service.template.containers[0];
     const modelSource = container?.image?.includes('ollama') ? 'ollama' : 'huggingface';
@@ -398,7 +409,7 @@ const ServiceDetailView = ({ project, initialService, onBack, onEdit }: { projec
                     {(['details', 'logs', 'permissions', 'chat'] as Tab[]).map(tab => (
                         <button
                             key={tab}
-                            onClick={() => setActiveTab(tab)}
+                            onClick={() => handleTabChange(tab)}
                             className={`capitalize py-3 px-1 border-b-2 font-medium text-sm ${
                                 activeTab === tab
                                 ? 'border-blue-600 text-blue-600'

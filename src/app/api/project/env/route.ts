@@ -1,7 +1,16 @@
-// src/app/api/project/env/route.ts
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-  const hfToken = process.env.HUGGING_FACE_HUB_TOKEN || '';
-  return NextResponse.json({ hfToken });
+  const lockedProjectId = process.env.GCP_PROJECT_ID;
+
+  if (lockedProjectId) {
+    return NextResponse.json({
+      isProjectLocked: true,
+      lockedProjectId,
+    });
+  }
+
+  return NextResponse.json({
+    isProjectLocked: false,
+  });
 }

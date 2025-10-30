@@ -34,8 +34,9 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
   });
   const [permissionStatus, setPermissionStatus] = useState<{ [key: string]: boolean | null }>({
     'resourcemanager.projects.get': null,
-    'run.services.list': null,
-    'storage.buckets.list': null,
+    'run.services.create': null,
+    'storage.buckets.create': null,
+    'cloudbuild.builds.create': null,
   });
   const [isLoadingStatus, setIsLoadingStatus] = useState(false);
 
@@ -65,33 +66,21 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
     const loadInitialData = async () => {
       setIsLoadingInitialData(true);
 
-      // First, check if the project is locked by an environment variable
       const envResponse = await fetch('/api/project/env');
       const envData = await envResponse.json();
 
       if (envData.isProjectLocked) {
         setIsProjectLocked(true);
-        try {
-          const projectDetailsResponse = await fetch(`/api/project/details?projectId=${encodeURIComponent(envData.lockedProjectId)}`);
-          if (projectDetailsResponse.ok) {
-            const projectDetails = await projectDetailsResponse.json();
-            onProjectSelect(projectDetails);
-            setDraftSelectedProject(projectDetails.projectId);
-            setIsEditingProject(false);
-          } else {
-            // If fetching details fails, still lock to the ID but show ID as name
-            onProjectSelect({ projectId: envData.lockedProjectId, name: envData.lockedProjectId });
-          }
-        } catch (error) {
-          console.error('Failed to fetch locked project details:', error);
-          onProjectSelect({ projectId: envData.lockedProjectId, name: envData.lockedProjectId });
-        }
+        setIsEditingProject(false);
+        onProjectSelect({ projectId: envData.lockedProjectId, name: envData.lockedProjectId });
+        // Attempt to fetch full details, but don't block on it
+        fetch(`/api/project/details?projectId=${encodeURIComponent(envData.lockedProjectId)}`)
+          .then(res => res.ok && res.json())
+          .then(details => onProjectSelect(details))
+          .catch(err => console.error("Couldn't fetch locked project details, using ID as name.", err));
       } else {
         setIsProjectLocked(false);
-        // If not locked, proceed with the existing local storage logic
         const savedProjectId = localStorage.getItem('selectedProject');
-        let projectLoadedFromStorage = false;
-
         if (savedProjectId) {
           try {
             const response = await fetch(`/api/project/details?projectId=${encodeURIComponent(savedProjectId)}`);
@@ -100,20 +89,18 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
               onProjectSelect(projectDetails);
               setDraftSelectedProject(projectDetails.projectId);
               setIsEditingProject(false);
-              projectLoadedFromStorage = true;
             } else {
               localStorage.removeItem('selectedProject');
+              setIsEditingProject(true);
             }
           } catch (error) {
             console.error('Failed to fetch saved project details:', error);
             localStorage.removeItem('selectedProject');
+            setIsEditingProject(true);
           }
-        }
-
-        if (!projectLoadedFromStorage) {
+        } else {
           setIsEditingProject(true);
         }
-        
         fetchInitialProjects();
       }
 
@@ -212,7 +199,9 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
   };
 
   const handleCancelEdit = () => {
-    setDraftSelectedProject(selectedProject ? selectedProject.projectId : '');
+    if (selectedProject) {
+      setDraftSelectedProject(selectedProject.projectId);
+    }
     setIsEditingProject(false);
   };
 
@@ -244,7 +233,20 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
           <h2 className="text-base font-medium text-gray-800">Project Selection</h2>
         </div>
         <div className="p-4">
-          {isEditingProject ? (
+          {isProjectLocked ? (
+            <div className="flex items-center justify-between">
+              {selectedProject ? (
+                <div className="flex items-center">
+                  <svg className="w-5 h-5 text-green-600 mr-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"></path></svg>
+                  <div className="text-sm">
+                    <span className="font-medium text-gray-800">{selectedProject.name}</span>
+                    <span className="text-gray-500 ml-1">({selectedProject.projectId})</span>
+                  </div>
+                </div>
+              ) : <p className="text-sm text-gray-500">Loading project...</p>}
+              <span className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 rounded-md">Managed by environment</span>
+            </div>
+          ) : isEditingProject ? (
             <div className="space-y-3">
               {canListProjects ? (
                 <>
@@ -282,7 +284,7 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
               )}
               <div className="flex space-x-2 mt-3">
                 <button onClick={handleConfirmProject} disabled={!draftSelectedProject} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-300">Confirm</button>
-                <button onClick={handleCancelEdit} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">Cancel</button>
+                {selectedProject && <button onClick={handleCancelEdit} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">Cancel</button>}
               </div>
             </div>
           ) : (
@@ -296,9 +298,7 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
                   </div>
                 </div>
               ) : <p className="text-sm text-gray-500">Select a project</p>}
-              {!isProjectLocked && (
-                <button onClick={() => setIsEditingProject(true)} className="text-sm font-medium text-blue-600 hover:underline">Change</button>
-              )}
+              <button onClick={() => setIsEditingProject(true)} className="text-sm font-medium text-blue-600 hover:underline">Change</button>
             </div>
           )}
         </div>
@@ -342,8 +342,9 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
                       To manage resources, the identity <span className="font-mono">{identity?.email}</span> needs the following roles on project <span className="font-mono">{selectedProject?.projectId}</span>:
                     </p>
                     <ul className="list-disc list-inside mt-1 text-gray-600">
-                      {permissionStatus['run.services.list'] === false && <li>Cloud Run Admin (`roles/run.admin`)</li>}
-                      {permissionStatus['storage.buckets.list'] === false && <li>Storage Admin (`roles/storage.admin`)</li>}
+                      {permissionStatus['run.services.create'] === false && <li>Cloud Run Admin (`roles/run.admin`)</li>}
+                      {permissionStatus['storage.buckets.create'] === false && <li>Storage Admin (`roles/storage.admin`)</li>}
+                      {permissionStatus['cloudbuild.builds.create'] === false && <li>Cloud Build Editor (`roles/cloudbuild.editor`)</li>}
                     </ul>
                   </div>
                 )}
