@@ -1,0 +1,45 @@
+# This file defines a Cloud Build job to download a model from the public
+# Ollama OCI registry and upload it to GCS in the required structure.
+
+steps:
+  # Step 1: Download the Ollama model using the ollama CLI.
+  - name: 'ollama/ollama'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -e # Exit immediately if a command exits with a non-zero status.
+        
+        echo "--- Starting Ollama model download for $_MODEL_ID ---"
+        
+        # Run ollama serve in the background and wait for it to be ready.
+        ollama serve & 
+        sleep 5
+        
+        # Pull the model using the ollama CLI.
+        ollama pull "$_MODEL_ID"
+        
+        echo "--- Ollama model download complete. ---"
+    id: 'Download Ollama Model'
+
+  # Step 2: Upload the downloaded Ollama model directory to GCS.
+  # The ollama pull command stores models in /root/.ollama. We need to copy
+  # the contents of this directory to the GCS bucket.
+  - name: 'gcr.io/cloud-builders/gsutil'
+    args:
+      - '-m'
+      - 'cp'
+      - '-r'
+      - '/builder/home/.ollama/*' # Copy all contents from the Ollama data directory
+      - 'gs://$_BUCKET_NAME/ollama/' # Target GCS path
+    id: 'Upload to GCS'
+    waitFor: ['Download Ollama Model']
+
+# Models can be large and take time to download. The default timeout is 10 minutes.
+# This increases the timeout to 2 hours.
+timeout: 7200s
+
+# The default Cloud Build machine may not be sufficient for large models.
+# We specify a machine with more CPU to potentially speed up transfers.
+options:
+  machineType: 'E2_HIGHCPU_8'

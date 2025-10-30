@@ -1,175 +1,113 @@
 import { Storage } from '@google-cloud/storage';
+import { CloudBuildClient } from '@google-cloud/cloudbuild';
+import * as yaml from 'js-yaml';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 
 const METADATA_FILE_NAME = 'llm-manager-metadata.json';
 
-// This function is the main entry point for the API route.
-// It handles streaming an Ollama model from the registry to GCS.
 export async function POST(request: Request) {
-  const { modelId, bucketName, projectId, totalSize, files, manifest } = await request.json();
+  const { modelId, bucketName, projectId, totalSize } = await request.json();
 
-  if (!modelId || !bucketName || !projectId || !files || !manifest) {
-    return new Response('Missing required parameters', { status: 400 });
+  if (!modelId || !bucketName || !projectId) {
+    return new Response('Missing modelId, bucketName, or projectId', { status: 400 });
   }
 
-  // Use a TransformStream to send progress updates back to the client.
-  const {readable, writable} = new TransformStream();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
-
-  const sendProgress = (file: string, progress: number, total: number) => {
-    writer.write(encoder.encode(`data: ${JSON.stringify({ file, progress, total })}\n\n`));
-  };
-
-  const sendError = (error: string) => {
-    writer.write(encoder.encode(`data: ${JSON.stringify({ error })}\n\n`));
-    writer.close();
-  }
-
-  const log = (message: string) => {
-    writer.write(encoder.encode(`data: ${JSON.stringify({ message })}\n\n`));
-    console.log(message);
-  };
-
-  // Start the download process but don't wait for it to finish.
-  syncModelToGCS(writer, { modelId, bucketName, projectId, totalSize, modelFiles: files, manifest, log, sendProgress, sendError });
-
-  return new Response(readable, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
-  });
-}
-
-// This function contains the core logic for syncing the model.
-async function syncModelToGCS(
-    writer: WritableStreamDefaultWriter,
-    { modelId, bucketName, projectId, totalSize, modelFiles, manifest, log, sendProgress, sendError }:
-    { modelId: string, bucketName: string, projectId: string, totalSize: number, modelFiles: { name: string, size: number }[], manifest: any, log: (message: string) => void, sendProgress: (file: string, progress: number, total: number) => void, sendError: (error: string) => void }
-) {
   try {
-    const [modelName, tag] = modelId.split(':');
-    log(`Starting sync of Ollama model ${modelId} to GCS bucket ${bucketName}.`);
+    // 1. Load the Cloud Build configuration from the YAML file.
+    const yamlPath = path.join(process.cwd(), 'src', 'app', 'cloudbuild', 'ollama.yaml');
+    const yamlFile = await fs.readFile(yamlPath, 'utf8');
+    const buildConfig = yaml.load(yamlFile) as { steps: any[], timeout: string, options: any };
+
+    // 2. Initialize clients for GCS and Cloud Build.
     const storage = new Storage({ projectId });
+    const cloudBuildClient = new CloudBuildClient({ projectId });
     const bucket = storage.bucket(bucketName);
 
-    // Create placeholder files to ensure directories exist in the FUSE mount
-    log('Ensuring base directories exist...');
-    await bucket.file('ollama/manifests/').save('');
-    await bucket.file('ollama/blobs/').save('');
-    log('Base directories ensured.');
-
-    // 1. Save the manifest file to the correct OCI structure.
-    log('Saving manifest to GCS...');
-    const manifestPath = `ollama/manifests/registry.ollama.ai/library/${modelName}/${tag || 'latest'}`;
-    const manifestFile = bucket.file(manifestPath);
-    await manifestFile.save(JSON.stringify(manifest, null, 2), {
-        contentType: 'application/json',
-    });
-    log('Manifest saved.');
-
-    // 2. Iterate through each file (layers and config) and stream it to the blobs directory.
-    for (const file of modelFiles) {
-      const digest = file.name; // e.g., "sha256:12345..."
-      const gcsFilename = digest.replace(':', '-'); // "sha256-12345..."
-      const gcsPath = `ollama/blobs/${gcsFilename}`;
-      const gcsFile = bucket.file(gcsPath);
-
-      const [exists] = await gcsFile.exists();
-      if (exists) {
-        const [metadata] = await gcsFile.getMetadata();
-        if (metadata.size == file.size) {
-            log(`Blob ${digest.substring(0, 15)}... already exists in GCS with the correct size. Skipping.`);
-            sendProgress(digest, file.size, file.size);
-            continue;
-        } else {
-            log(`Blob ${digest.substring(0, 15)}... exists but has a different size. Re-downloading.`);
-        }
-      }
-
-      log(`Downloading blob ${digest.substring(0, 15)}...`);
-      const downloadUrl = `https://registry.ollama.ai/v2/library/${modelName}/blobs/${digest}`;
-      const downloadResponse = await fetch(downloadUrl);
-
-      if (!downloadResponse.ok || !downloadResponse.body) {
-        throw new Error(`Failed to download blob ${digest}: ${downloadResponse.statusText}`);
-      }
-
-      // 3. Stream the file from the download URL to GCS, reporting progress.
-      await new Promise<void>((resolve, reject) => {
-        const fileSize = file.size || 0;
-        let downloadedSize = 0;
-
-        const gcsWriteStream = gcsFile.createWriteStream();
-        const reader = downloadResponse.body!.getReader();
-
-        const pump = () => {
-          reader.read().then(({ done, value }) => {
-            if (done) {
-              gcsWriteStream.end();
-              sendProgress(digest, fileSize, fileSize);
-              log(`Successfully uploaded blob ${digest.substring(0, 15)}...`);
-              resolve();
-              return;
-            }
-
-            gcsWriteStream.write(value);
-            downloadedSize += value.length;
-            sendProgress(digest, downloadedSize, fileSize);
-            pump();
-          }).catch(err => {
-            gcsWriteStream.destroy(err);
-            reject(err);
-          });
-        };
-        pump();
-      });
-    }
-
-    // 4. After all files are downloaded, update the metadata file.
-    log('All files downloaded. Updating metadata...');
+    // 3. Update metadata to indicate that the download is starting.
     const metadataFile = bucket.file(METADATA_FILE_NAME);
-    let metadata;
+    let metadata: any;
     try {
-        const [contents] = await metadataFile.download();
-        metadata = JSON.parse(contents.toString());
-    } catch {
-        log('Could not download or parse existing metadata. Creating a new one.');
-        metadata = {
-            description: 'This bucket is managed by the Cloud Run LLM Manager.',
-            models: [],
-        };
+      const [contents] = await metadataFile.download();
+      metadata = JSON.parse(contents.toString());
+    } catch (error) {
+      console.log('Metadata file not found or invalid. Creating a new one.');
+      metadata = {
+        description: 'This bucket is managed by the Cloud Run LLM Manager.',
+        models: [],
+      };
     }
 
-    const modelExists = metadata.models.some((m: { id: string }) => m.id === modelId);
-    if (!modelExists) {
-        metadata.models.push({
-            id: modelId,
-            source: 'ollama',
-            size: totalSize,
-            status: 'completed',
-            downloadedAt: new Date().toISOString(),
-        });
+    const existingModelIndex = metadata.models.findIndex((m: { id: string }) => m.id === modelId);
+    const modelData = {
+      id: modelId,
+      source: 'ollama',
+      size: totalSize,
+      status: 'downloading',
+      submittedAt: new Date().toISOString(),
+    };
+
+    if (existingModelIndex > -1) {
+      metadata.models[existingModelIndex] = { ...metadata.models[existingModelIndex], ...modelData };
     } else {
-        // If it exists, update its status
-        metadata.models = metadata.models.map((m: any) => 
-            m.id === modelId ? { ...m, status: 'completed', size: totalSize, downloadedAt: new Date().toISOString() } : m
-        );
+      metadata.models.push(modelData);
     }
 
     await metadataFile.save(JSON.stringify(metadata, null, 2), {
-        contentType: 'application/json',
+      contentType: 'application/json',
     });
 
-    log(`Sync completed successfully for Ollama model ${modelId}.`);
+    // 4. Define substitutions for the Cloud Build job.
+    const substitutions = {
+      _MODEL_ID: modelId,
+      _BUCKET_NAME: bucketName,
+    };
 
-  } catch (error: unknown)
-   {
-    console.error(`Error during Ollama sync for ${modelId}:`, error);
+    // 5. Create and submit the Cloud Build job.
+    const timeoutSeconds = parseInt(buildConfig.timeout.replace('s', ''), 10);
+    const [operation] = await cloudBuildClient.createBuild({
+      projectId,
+      build: {
+        steps: buildConfig.steps,
+        timeout: { seconds: timeoutSeconds },
+        options: buildConfig.options,
+        substitutions,
+      },
+    });
+
+    const build = (operation.metadata as any)?.build;
+
+    if (!build || !build.id) {
+        throw new Error('Failed to create build job.');
+    }
+
+    console.log(`Started Cloud Build job ${build.id} for model ${modelId}.`);
+
+    // 6. Update metadata with the build ID and log URL.
+    metadata.models = metadata.models.map((m: { id: string }) => 
+      m.id === modelId ? { ...m, buildId: build.id, logUrl: build.logUrl } : m
+    );
+
+    await metadataFile.save(JSON.stringify(metadata, null, 2), {
+      contentType: 'application/json',
+    });
+
+    // 7. Return the build information to the client.
+    return new Response(JSON.stringify({
+      message: 'Cloud Build job started successfully.',
+      buildId: build.id,
+      logUrl: build.logUrl,
+    }), {
+      status: 202, // Accepted
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  } catch (error: unknown) {
+    console.error(`Error starting Cloud Build job for ${modelId}:`, error);
     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-    sendError(errorMessage);
-  } finally {
-    writer.close();
+    return new Response(JSON.stringify({ error: errorMessage }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 }

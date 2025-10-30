@@ -1,0 +1,43 @@
+# This file defines a Cloud Build job to download a model repository from
+# Hugging Face using the 'huggingface_hub' CLI and upload it to GCS.
+
+steps:
+  # Step 1: Download the entire model repository
+  # We use a Python image to install and run the huggingface_hub CLI.
+  - name: 'python:3.10-slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Add the pip install location to the PATH
+        export PATH="/usr/local/bin:$$PATH"
+        
+        pip install huggingface_hub
+        
+        # The 'hf' command is the correct executable name.
+        hf download \
+          "$_MODEL_ID" \
+          --local-dir /workspace/model-repo \
+          --token "$_HF_TOKEN"
+    id: 'Download Model Repo'
+
+  # Step 2: Upload the downloaded model directory to GCS
+  # We use 'gsutil -m cp -r' to upload all files in parallel.
+  - name: 'gcr.io/cloud-builders/gsutil'
+    args:
+      - '-m'
+      - 'cp'
+      - '-r'
+      - '/workspace/model-repo'
+      - 'gs://$_BUCKET_NAME/$_MODEL_ID'
+    id: 'Upload to GCS'
+
+# Models can be large and take time to download. The default timeout is 10 minutes.
+# This increases the timeout to 2 hours.
+timeout: 7200s
+
+# The default Cloud Build machine has 100GB of local disk in /workspace.
+# If your model is larger, you'll need to specify a high-volume machine.
+# You can also increase CPU for faster compression/decompression if needed.
+options:
+  machineType: 'E2_HIGHCPU_8'

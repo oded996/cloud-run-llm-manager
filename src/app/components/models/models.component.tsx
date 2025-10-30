@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SUPPORTED_REGIONS } from '@/app/config/regions';
 import { Project, Tooltip } from '../general/general.component';
 
@@ -8,9 +8,12 @@ import { SUGGESTED_MODELS } from '@/app/config/suggested-models';
 interface Model {
   id: string;
   source: 'huggingface' | 'ollama';
-  status: 'completed' | 'downloading';
-  downloadedAt: string;
+  status: 'completed' | 'downloading' | 'failed';
+  downloadedAt?: string;
+  submittedAt?: string;
   size?: number;
+  buildId?: string;
+  logUrl?: string;
 }
 
 interface Bucket {
@@ -84,23 +87,26 @@ const RedXIcon = () => (
 );
 
 const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Project | null, onSwitchToServices: (serviceName: string, region: string) => void }) => {
-  const [viewMode, setViewMode] = useState<'list' | 'import' | 'deploy'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'import' | 'deploy' | 'progress'>('list');
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
   const [deployingModel, setDeployingModel] = useState<{model: Model, bucket: Bucket} | null>(null);
+  const [progressModel, setProgressModel] = useState<{model: Model, bucket: Bucket} | null>(null);
 
   const cacheKey = selectedProject ? `llm_manager_models_cache_${selectedProject.projectId}` : null;
 
   const fetchBuckets = useCallback(async (isForcedRefresh = false) => {
+    console.log('fetchBuckets called. isForcedRefresh:', isForcedRefresh);
     if (!selectedProject || !cacheKey) return;
 
     setIsRefreshing(true);
-    // On initial load, check for cache. If it exists, the main loader is turned off.
     if (!isForcedRefresh) {
         const cachedData = localStorage.getItem(cacheKey);
         if (cachedData) {
+            console.log('Using cached data for buckets.');
             setBuckets(JSON.parse(cachedData));
             setIsLoading(false);
         }
@@ -112,14 +118,19 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
       const response = await fetch(`/api/models/buckets?projectId=${selectedProject.projectId}`);
       if (!response.ok) throw new Error('Failed to fetch buckets.');
       const data = await response.json();
+      console.log('API response for buckets:', data);
       
       const cachedData = localStorage.getItem(cacheKey);
       if (JSON.stringify(data) !== cachedData) {
+        console.log('New data received, updating cache and state.');
         setBuckets(data);
         localStorage.setItem(cacheKey, JSON.stringify(data));
+      } else {
+        console.log('Data is identical to cache, no update needed.');
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+      console.error('Error fetching buckets:', errorMessage);
       setError(errorMessage);
     } finally {
       setIsLoading(false);
@@ -136,13 +147,73 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
 
   useEffect(() => {
     if (viewMode === 'list' && selectedProject) {
-      fetchBuckets(false); // Initial fetch
+      fetchBuckets(false);
     }
   }, [selectedProject, viewMode, fetchBuckets]);
+
+  useEffect(() => {
+    const checkDownloadingModels = async () => {
+        if (!buckets || buckets.length === 0 || !selectedProject) return;
+
+        const modelsToCheck = buckets.flatMap(bucket => 
+            bucket.models
+                .filter(model => model.status === 'downloading' && model.buildId)
+                .map(model => ({
+                    buildId: model.buildId!,
+                    projectId: selectedProject.projectId,
+                    bucketName: bucket.name,
+                    modelId: model.id,
+                }))
+        );
+
+        if (modelsToCheck.length > 0) {
+            try {
+                const response = await fetch('/api/models/import/bulk-status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ modelsToCheck }),
+                });
+                const { updatedModels } = await response.json();
+
+                if (updatedModels && updatedModels.length > 0) {
+                    setBuckets(prevBuckets => {
+                        const newBuckets = prevBuckets.map(bucket => ({
+                            ...bucket,
+                            models: bucket.models.map(model => {
+                                const updated = updatedModels.find((u: any) => u.modelId === model.id && u.bucketName === bucket.name);
+                                return updated ? { ...model, status: updated.status } : model;
+                            }),
+                        }));
+                        
+                        if (cacheKey) {
+                            localStorage.setItem(cacheKey, JSON.stringify(newBuckets));
+                        }
+                        return newBuckets;
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to perform bulk status check:', error);
+            }
+        }
+    };
+
+    checkDownloadingModels();
+  }, [buckets, selectedProject, cacheKey]);
 
   const handleDeployClick = (model: Model, bucket: Bucket) => {
     setDeployingModel({ model, bucket });
     setViewMode('deploy');
+  };
+
+  const handleViewProgressClick = (model: Model, bucket: Bucket) => {
+    setProgressModel({ model, bucket });
+    setViewMode('progress');
+  };
+
+  const handleDownloadStart = (model: Model, bucket: Bucket) => {
+    setProgressModel({ model, bucket });
+    setViewMode('progress');
+    invalidateCacheAndRefresh();
   };
 
   if (viewMode === 'import') {
@@ -150,10 +221,7 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
       <ImportModelView
         project={selectedProject!}
         onClose={() => setViewMode('list')}
-        onImportSuccess={() => {
-          setViewMode('list');
-          invalidateCacheAndRefresh();
-        }}
+        onDownloadStart={handleDownloadStart}
       />
     );
   }
@@ -170,6 +238,20 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
     )
   }
 
+  if (viewMode === 'progress' && progressModel) {
+    return (
+      <ModelProgressView
+        project={selectedProject!}
+        model={progressModel.model}
+        bucket={progressModel.bucket}
+        onClose={() => {
+          setViewMode('list');
+          invalidateCacheAndRefresh();
+        }}
+      />
+    );
+  }
+
   return (
     <ModelsList
       selectedProject={selectedProject}
@@ -178,13 +260,107 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
       error={error}
       onImportClick={() => setViewMode('import')}
       onDeployClick={handleDeployClick}
+      onViewProgressClick={handleViewProgressClick}
       isRefreshing={isRefreshing}
       onRefresh={() => fetchBuckets(true)}
     />
   );
 };
 
-const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Project, onClose: () => void, onImportSuccess: () => void }) => {
+const ModelProgressView = ({ project, model, bucket, onClose }: { project: Project, model: Model, bucket: Bucket, onClose: () => void }) => {
+    const [buildStatus, setBuildStatus] = useState<string | null>(model.status);
+    const [buildLogs, setBuildLogs] = useState('Fetching logs...');
+    const logsEndRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (logsEndRef.current) {
+            logsEndRef.current.scrollTop = logsEndRef.current.scrollHeight;
+        }
+    }, [buildLogs]);
+
+    useEffect(() => {
+        if (!model.buildId) {
+            setBuildLogs('Error: Build ID is missing for this model.');
+            return;
+        };
+
+        const poll = async () => {
+            try {
+                const response = await fetch(`/api/models/import/status/${model.buildId}?projectId=${project.projectId}&bucketName=${bucket.name}&modelId=${model.id}`);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Failed to fetch build status:', response.status, errorText);
+                    return false;
+                }
+                const data = await response.json();
+                setBuildStatus(data.status);
+                setBuildLogs(data.logs);
+
+                const terminalStates = ['SUCCESS', 'FAILURE', 'INTERNAL_ERROR', 'TIMEOUT', 'CANCELLED'];
+                return data.status && terminalStates.includes(data.status);
+            } catch (error) {
+                console.error('Error polling build status:', error);
+                return false;
+            }
+        };
+
+        const intervalId = setInterval(async () => {
+            const shouldStop = await poll();
+            if (shouldStop) {
+                clearInterval(intervalId);
+            }
+        }, 3000); // Poll every 3 seconds
+
+        poll(); // Initial poll
+
+        return () => clearInterval(intervalId);
+    }, [model.buildId, model.id, project.projectId, bucket.name]);
+
+    return (
+        <div className="p-6 bg-gray-50 flex-grow">
+            <div className="max-w-4xl mx-auto">
+                <div className="flex justify-between items-center pb-4 mb-6">
+                    <div>
+                        <button onClick={onClose} className="text-sm font-medium text-blue-600 hover:underline mb-2">← Back to Models</button>
+                        <h1 className="text-xl font-medium text-gray-800">Download Progress: {model.id}</h1>
+                    </div>
+                </div>
+                <div className="space-y-4 bg-white border border-gray-200 rounded-md p-6">
+                    <div className="flex items-center space-x-3">
+                        <p className="font-medium text-sm">Status:</p>
+                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                            buildStatus === 'SUCCESS' ? 'bg-green-100 text-green-800' :
+                            buildStatus === 'QUEUED' || buildStatus === 'WORKING' ? 'bg-yellow-100 text-yellow-800' :
+                            buildStatus ? 'bg-red-100 text-red-800' :
+                            'bg-gray-100 text-gray-800'
+                        }`}>
+                            {buildStatus || 'Initializing...'}
+                        </span>
+                    </div>
+
+                    {model.logUrl && (
+                        <a href={model.logUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">
+                            View in Cloud Build Console →
+                        </a>
+                    )}
+
+                    <div ref={logsEndRef} className="bg-gray-900 text-white font-mono text-xs rounded-md p-4 h-96 overflow-y-auto">
+                        <pre>{buildLogs}</pre>
+                    </div>
+
+                    {buildStatus === 'SUCCESS' && (
+                        <p className="text-green-600">Download complete! You can now deploy this model.</p>
+                    )}
+                    {buildStatus === 'FAILURE' && (
+                        <p className="text-red-500">Download failed. Check the logs for details.</p>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const ImportModelView = ({ project, onClose, onDownloadStart }: { project: Project, onClose: () => void, onDownloadStart: (model: Model, bucket: Bucket) => void }) => {
     const [step, setStep] = useState(1);
     const [projectBuckets, setProjectBuckets] = useState<{name: string, location: string}[]>([]);
     const [isLoadingBuckets, setIsLoadingBuckets] = useState(true);
@@ -211,9 +387,8 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     const [estimatedVram, setEstimatedVram] = useState<number | null>(null);
     const [recommendedGpus, setRecommendedGpus] = useState<string[]>([]);
 
-    const [isDownloading, setIsDownloading] = useState(false);
-    const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>({ files: [], totalProgress: 0 });
-    const [downloadError, setDownloadError] = useState<string | null>(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [submitError, setSubmitError] = useState<string | null>(null);
 
     useEffect(() => {
         const fetchEnv = async () => {
@@ -381,60 +556,20 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
     };
 
     const handleStartDownload = async () => {
-        setIsDownloading(true);
-        setDownloadError(null);
-        setDownloadProgress({
-            message: 'Starting download...', 
-            files: preflightInfo!.files.map(f => ({ name: f.name, total: f.size, downloaded: 0 })),
-            totalProgress: 0,
-        });
-        setStep(4);
+        setIsSubmitting(true);
+        setSubmitError(null);
 
         const url = modelSource === 'huggingface'
             ? '/api/models/import/start'
             : '/api/models/import/ollama/start';
 
-        const body = modelSource === 'huggingface'
-            ? {
-                modelId,
-                bucketName: targetBucket,
-                hfToken,
-                projectId: project.projectId,
-                totalSize: preflightInfo?.totalSize,
-                files: preflightInfo?.files,
-                }
-            : {
-                modelId,
-                bucketName: targetBucket,
-                projectId: project.projectId,
-                totalSize: preflightInfo?.totalSize,
-                files: preflightInfo?.files,
-                manifest: preflightInfo?.manifest, // Pass manifest for Ollama
-                };
-        
-        const verifyDownload = async (retryCount = 0): Promise<void> => {
-            setDownloadProgress(prev => ({ ...prev, message: `Verifying download (attempt ${retryCount + 1})...` }));
-            try {
-                const verifyResponse = await fetch(`/api/models/import/verify?projectId=${project.projectId}&bucketName=${targetBucket}&modelId=${modelId}`);
-                const verifyData = await verifyResponse.json();
-
-                if (verifyResponse.ok && verifyData.verified) {
-                    setDownloadProgress(prev => ({ ...prev, message: 'Verification successful! Import complete.' }));
-                    setTimeout(onImportSuccess, 2000);
-                    setIsDownloading(false);
-                } else {
-                    throw new Error(verifyData.error || 'Verification failed.');
-                }
-            } catch (err: unknown) {
-                const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-                console.error(`Verification attempt ${retryCount + 1} failed:`, err);
-                if (retryCount < 2) { // 3 retries total (0, 1, 2)
-                    setTimeout(() => verifyDownload(retryCount + 1), 3000); // Wait 3 seconds before retrying
-                } else {
-                    setDownloadError(`Download completed, but verification failed after 3 attempts. Please check the bucket and try importing again. Error: ${errorMessage}`);
-                    setIsDownloading(false);
-                }
-            }
+        const body = {
+            modelId,
+            bucketName: targetBucket,
+            projectId: project.projectId,
+            totalSize: preflightInfo?.totalSize,
+            ...(modelSource === 'huggingface' && { hfToken }),
+            ...(modelSource === 'ollama' && { manifest: preflightInfo?.manifest }),
         };
 
         try {
@@ -444,66 +579,38 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                 body: JSON.stringify(body),
             });
 
-            if (!response.body) throw new Error('Download failed: No response body.');
+            const data = await response.json();
 
-            let buffer = '';            const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-    while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-            setDownloadProgress(prev => ({ ...prev, message: 'Download stream complete. Starting verification...' }));
-            await verifyDownload();
-            break;
-        }
-        
-        buffer += value;
-        let boundary = buffer.indexOf('\n\n');
-        while (boundary !== -1) {
-            const message = buffer.substring(0, boundary);
-            buffer = buffer.substring(boundary + 2);
-            if (message.startsWith('data: ')) {
-                try {
-                    const json = JSON.parse(message.substring(6));
-                    if (json.error) {
-                        console.error("Download error from server:", json.error);
-                        setDownloadError(json.error);
-                        setIsDownloading(false);
-                        return;
-                    }
-                    
-                    setDownloadProgress(prev => {
-                        const newFiles = prev.files?.map(f => {
-                            if (f.name === json.file) {
-                                return { ...f, downloaded: json.progress };
-                            }
-                            return f;
-                        }) || [];
-
-                        const totalDownloaded = newFiles.reduce((acc, f) => acc + f.downloaded, 0);
-                        const totalSize = newFiles.reduce((acc, f) => acc + f.total, 0);
-                        const totalProgress = totalSize > 0 ? (totalDownloaded / totalSize) * 100 : 0;
-
-                        return {
-                            ...prev,
-                            message: json.message || prev.message,
-                            files: newFiles,
-                            totalProgress: totalProgress,
-                        };
-                    });
-
-                } catch (e) {
-                    console.error("Failed to parse SSE chunk", message, e);
-                }
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to start download job.');
             }
-            boundary = buffer.indexOf('\n\n');
+            
+            const bucketData = projectBuckets.find(b => b.name === targetBucket)!;
+            const newModel: Model = {
+                id: modelId,
+                source: modelSource as 'huggingface' | 'ollama',
+                status: 'downloading',
+                size: preflightInfo?.totalSize,
+                buildId: data.buildId,
+                logUrl: data.logUrl,
+                submittedAt: new Date().toISOString(),
+            };
+            const newBucket: Bucket = {
+                name: bucketData.name,
+                location: bucketData.location,
+                models: [newModel],
+            };
+
+            onDownloadStart(newModel, newBucket);
+
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+            console.error("Download initiation failed:", err);
+            setSubmitError(errorMessage);
+        } finally {
+            setIsSubmitting(false);
         }
-    }
-} catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-    console.error("Download initiation failed:", err);
-    setDownloadError(errorMessage);
-    setIsDownloading(false);
-}
-};
+    };
 
     return (
         <div className="p-6 bg-gray-50 flex-grow">
@@ -689,64 +796,12 @@ const ImportModelView = ({ project, onClose, onImportSuccess }: { project: Proje
                         )}
                     </div>
 
-                    {step >= 3 && preflightInfo && (
-                        <div className="border-b border-gray-200 pb-6">
-                            <h2 className="text-base font-semibold text-gray-800 mb-4">Confirmation</h2>
-                            <div className="p-4 bg-gray-50 rounded-md border border-gray-200 text-sm space-y-2">
-                                <p className="font-medium">Model: <span className="font-normal text-gray-700">{modelId}</span></p>
-                                <p className="font-medium">Total Size: <span className="font-normal text-gray-700">{formatBytes(preflightInfo.totalSize)}</span></p>
-                                <p className="font-medium">Est. vRAM Required: <span className="font-normal text-gray-700">~{estimatedVram?.toFixed(2)} GB</span></p>
-                                <div>
-                                    <p className="font-medium">Compatible GPUs in {projectBuckets.find(b => b.name === targetBucket)?.location.toLowerCase()}:</p>
-                                    <ul className="list-disc list-inside pl-2 mt-1 space-y-1">
-                                        {SUPPORTED_REGIONS.find(r => r.name === projectBuckets.find(b => b.name === targetBucket)?.location.toLowerCase())?.gpus.map(gpu => (
-                                            <li key={gpu.name} className="flex items-center">
-                                                {gpu.vram_gb >= (estimatedVram || 0) ? <GreenCheckIcon /> : <RedXIcon />}
-                                                <span className="ml-2 text-gray-700">{gpu.name} ({gpu.vram_gb} GB)</span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </div>
-                                {recommendedGpus.length === 0 && (
-                                    <p className="text-yellow-600 font-medium pt-2">Warning: This model may not be deployable in the selected region as no available GPUs meet the estimated vRAM requirement.</p>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {step === 4 && (
-                        <div>
-                            <h2 className="text-base font-semibold text-gray-800 mb-4">Download Progress</h2>
-                            <div className="space-y-4">
-                                {downloadError && <p className="text-red-500">{downloadError}</p>}
-                                
-                                <div>
-                                    <p className="font-medium text-sm">Overall Progress: {downloadProgress.totalProgress?.toFixed(2) ?? 0}%</p>
-                                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-1">
-                                        <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${downloadProgress.totalProgress ?? 0}%` }}></div>
-                                    </div>
-                                </div>
-
-                                <div className="space-y-2 pt-2 border-t">
-                                    {downloadProgress.files?.map(file => (
-                                        <div key={file.name}>
-                                            <p className="font-mono text-xs">{file.name}</p>
-                                            <div className="w-full bg-gray-200 rounded-full h-1.5">
-                                                <div className="bg-green-600 h-1.5 rounded-full" style={{ width: `${(file.downloaded / file.total) * 100}%` }}></div>
-                                            </div>
-                                            <p className="text-xs text-gray-600">{formatBytes(file.downloaded)} / {formatBytes(file.total)}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                                {downloadProgress.message && <p className="text-sm text-gray-600 italic mt-2">{downloadProgress.message}</p>}
-                            </div>
-                        </div>
-                    )}
+                    {submitError && <p className="text-red-500">{submitError}</p>}
 
                     <div className="flex justify-end pt-4">
                         {step === 3 && (
-                            <button onClick={handleDownloadConfirmation} disabled={isDownloading || !targetBucket} className={`px-6 py-2 font-medium text-white rounded-md flex items-center ${recommendedGpus.length === 0 ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-blue-600 hover:bg-blue-700'} disabled:bg-gray-400`}>
-                                {isDownloading && <Spinner />}
+                            <button onClick={handleDownloadConfirmation} disabled={isSubmitting || !targetBucket} className={`px-6 py-2 font-medium text-white rounded-md flex items-center ${recommendedGpus.length === 0 ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-blue-600 hover:bg-blue-700'} disabled:bg-gray-400`}>
+                                {isSubmitting && <Spinner />}
                                 {recommendedGpus.length > 0 ? 'Start Download' : 'Continue Anyway'}
                             </button>
                         )}
@@ -948,7 +1003,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
             setContainerPort('11434');
             setArgs([]);
             setEnvVars([
-                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama` },
+                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama/models` },
                 { id: 2, key: 'OLLAMA_DEBUG', value: 'false' },
                 { id: 3, key: 'OLLAMA_KEEP_ALIVE', value: '-1' },
                 { id: 4, key: 'MODEL', value: model.id },
@@ -1122,6 +1177,13 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                 containers: [{
                     image: containerImage,
                     ports: [{ containerPort: parseInt(containerPort, 10) }],
+                    startupProbe: {
+                        timeoutSeconds: 600,
+                        periodSeconds: 240,
+                        tcpSocket: {
+                            port: parseInt(containerPort, 10),
+                        },
+                    },
                     resources: { limits: { cpu, memory, 'nvidia.com/gpu': '1' } },
                     args: args.map(arg => `${arg.key}=${arg.value}`),
                     env: envVars.map(env => ({ name: env.key, value: env.value })),
@@ -1398,14 +1460,14 @@ const RefreshIcon = ({ isRefreshing }: { isRefreshing: boolean }) => (
     </svg>
 );
 
-const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick, onDeployClick, isRefreshing, onRefresh }: { selectedProject: Project | null, buckets: Bucket[], isLoading: boolean, error: string | null, onImportClick: () => void, onDeployClick: (model: Model, bucket: Bucket) => void, isRefreshing: boolean, onRefresh: () => void }) => {
+const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick, onDeployClick, onViewProgressClick, isRefreshing, onRefresh }: { selectedProject: Project | null, buckets: Bucket[], isLoading: boolean, error: string | null, onImportClick: () => void, onDeployClick: (model: Model, bucket: Bucket) => void, onViewProgressClick: (model: Model, bucket: Bucket) => void, isRefreshing: boolean, onRefresh: () => void }) => {
 
   const allModels = buckets.flatMap(bucket => 
     bucket.models.map(model => ({
       ...model,
       bucketName: bucket.name,
       bucketLocation: bucket.location,
-      originalBucket: bucket, // Keep a reference to the original bucket object
+      originalBucket: bucket,
     }))
   );
 
@@ -1450,35 +1512,30 @@ const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick,
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="p-3 font-medium text-gray-600">Model ID</th>
+                <th className="p-3 font-medium text-gray-600">Status</th>
                 <th className="p-3 font-medium text-gray-600">Source</th>
                 <th className="p-3 font-medium text-gray-600">Bucket</th>
-                <th className="p-3 font-medium text-gray-600">Region</th>
                 <th className="p-3 font-medium text-gray-600">Size</th>
-                <th className="p-3 font-medium text-gray-600">Est. vRAM</th>
-                <th className="p-3 font-medium text-gray-600">Recommended GPUs</th>
                 <th className="p-3 font-medium text-gray-600"></th>
               </tr>
             </thead>
             <tbody>
               {allModels.map((model) => {
-                const regionConfig = SUPPORTED_REGIONS.find(r => r.name === model.bucketLocation.toLowerCase());
-                const estimatedVramGb = model.size ? (model.size / (1024 * 1024 * 1024)) * 1.2 : 0;
-                const recommendations = regionConfig && model.size
-                  ? regionConfig.gpus
-                      .filter(gpu => gpu.vram_gb >= estimatedVramGb)
-                      .map(gpu => gpu.name)
-                      .join(', ')
-                  : null;
-
                 return (
                   <tr key={`${model.bucketName}-${model.id}`} className="border-b border-gray-200 last:border-b-0 hover:bg-gray-50">
                     <td className="p-3 font-medium text-gray-800">{model.id}</td>
+                    <td className="p-3 text-gray-800">
+                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                            model.status === 'completed' ? 'bg-green-100 text-green-800' :
+                            model.status === 'downloading' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-red-100 text-red-800'
+                        }`}>
+                            {model.status}
+                        </span>
+                    </td>
                     <td className="p-3 text-gray-800">{model.source}</td>
                     <td className="p-3 text-gray-800">{model.bucketName}</td>
-                    <td className="p-3 text-gray-800">{model.bucketLocation.toLowerCase()}</td>
                     <td className="p-3 text-gray-800">{model.size ? formatBytes(model.size) : 'N/A'}</td>
-                    <td className="p-3 text-gray-800">{estimatedVramGb > 0 ? `~${estimatedVramGb.toFixed(2)} GB` : 'N/A'}</td>
-                    <td className="p-3 text-gray-800">{recommendations || 'N/A'}</td>
                     <td className="p-3 text-right">
                       {model.status === 'completed' && (
                         <button 
@@ -1486,6 +1543,14 @@ const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick,
                           className="text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 px-3 py-1"
                         >
                           Deploy
+                        </button>
+                      )}
+                      {model.status === 'downloading' && (
+                        <button 
+                          onClick={() => onViewProgressClick(model, model.originalBucket)}
+                          className="text-sm font-medium text-blue-600 rounded-md hover:bg-blue-100 px-3 py-1"
+                        >
+                          View Progress
                         </button>
                       )}
                     </td>
