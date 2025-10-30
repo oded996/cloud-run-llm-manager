@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Header from "./components/header/header.component";
 import Sidebar, { View } from './components/sidebar/sidebar.component';
@@ -8,7 +8,7 @@ import General, { Project } from './components/general/general.component';
 import Models from './components/models/models.component';
 import Services from './components/services/services.component';
 
-export default function Home() {
+function HomeContent() {
   const searchParams = useSearchParams();
   const viewFromUrl = searchParams.get('view') as View | null;
 
@@ -44,5 +44,13 @@ export default function Home() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <HomeContent />
+    </Suspense>
   );
 }

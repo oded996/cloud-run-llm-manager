@@ -134,7 +134,6 @@ const Services = ({ selectedProject }: { selectedProject: Project | null }) => {
             model={{ id: '', source: 'huggingface', status: 'completed', downloadedAt: '', size: 0 }} // Dummy model
             bucket={{ name: '', location: '', models: [] }} // Dummy bucket
             onClose={() => setEditingService(null)}
-            onDeploymentStart={handleSwitchToServices}
             existingService={editingService}
         />
     );

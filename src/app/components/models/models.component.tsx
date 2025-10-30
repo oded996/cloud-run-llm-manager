@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { SUPPORTED_REGIONS } from '@/app/config/regions';
 import { Project, Tooltip } from '../general/general.component';
 
@@ -86,7 +87,7 @@ const RedXIcon = () => (
     </svg>
 );
 
-const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Project | null, onSwitchToServices: (serviceName: string, region: string) => void }) => {
+const Models = ({ selectedProject }: { selectedProject: Project | null }) => {
   const [viewMode, setViewMode] = useState<'list' | 'import' | 'deploy' | 'progress'>('list');
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -233,7 +234,6 @@ const Models = ({ selectedProject, onSwitchToServices }: { selectedProject: Proj
         model={deployingModel.model}
         bucket={deployingModel.bucket}
         onClose={() => setViewMode('list')}
-        onDeploymentStart={onSwitchToServices}
       />
     )
   }
@@ -884,7 +884,8 @@ interface Service {
   }[];
 }
 
-export const DeployServiceView = ({ project, model: initialModel, bucket: initialBucket, onClose, onDeploymentStart, existingService }: { project: Project, model: Model, bucket: Bucket, onClose: () => void, onDeploymentStart: (serviceName: string, region: string) => void, existingService?: Service | null }) => {
+export const DeployServiceView = ({ project, model: initialModel, bucket: initialBucket, onClose, existingService }: { project: Project, model: Model, bucket: Bucket, onClose: () => void, existingService?: Service | null }) => {
+    const router = useRouter();
 
     const isEditMode = !!existingService;
 
@@ -1269,7 +1270,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                         if (json.creationStarted) {
                             setDeployProgress(prev => [...prev, { message: `Service ${isEditMode ? 'updated' : 'deployed'} successfully. Redirecting...` }]);
                             setTimeout(() => {
-                                onDeploymentStart(json.serviceName, json.region);
+                                router.push(`/?view=services&service=${json.serviceName}&region=${json.region}`);
                             }, 5000); // Wait 5 seconds before redirecting
                             reader.cancel();
                             return;
