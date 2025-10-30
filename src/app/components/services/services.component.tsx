@@ -337,7 +337,11 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
     };
 
     if (!service) {
-        return <div className="p-6">{isLoading ? <p>Loading service details...</p> : <p className="text-red-500">{error || 'Service not found.'}</p>}</div>;
+        return (
+            <div className="p-6">
+                {isLoading ? <p>Loading service details...</p> : <p className="text-red-500">{error || 'Service not found.'}</p>}
+            </div>
+        );
     }
 
     const consoleUrl = `https://console.cloud.google.com/run/detail/${region}/${serviceName}/revisions?project=${project.projectId}`;

@@ -24,57 +24,95 @@ export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { service
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const [isModelReady, setIsModelReady] = useState(false);
+  const [modelLoadingMessage, setModelLoadingMessage] = useState('Initializing model...');
 
   useEffect(() => {
-    const fetchModels = async () => {
+    const loadAndVerifyModel = async (modelToLoad: string) => {
+        setModelLoadingMessage(`Loading model ${modelToLoad} into GPU memory... (this may take a moment)`);
+        try {
+            // This request acts as a "wake-up" call. It will only complete
+            // once the model is fully loaded and ready for inference.
+            const response = await fetch('/api/services/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    serviceUrl,
+                    path: '/api/generate',
+                    method: 'POST',
+                    payload: { model: modelToLoad, prompt: 'hello', stream: false },
+                }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to load model.');
+            }
+            
+            // If the request succeeds, the model is ready.
+            setIsModelReady(true);
+
+        } catch (error: any) {
+            console.error("Failed to trigger model load:", error);
+            setError(`Failed to load model: ${error.message}`);
+        }
+    };
+
+    const fetchModelsAndLoad = async () => {
       setIsLoadingModels(true);
+      setError(null);
       try {
-        // Choose the path and method based on the model source
         const isOllama = modelSource === 'ollama';
         const path = isOllama ? '/api/tags' : '/v1/models';
-        const method = isOllama ? 'GET' : 'GET'; // Ollama uses GET, vLLM also uses GET for listing models
+        const method = 'GET';
 
         const response = await fetch('/api/services/chat', {
-          method: 'POST', // Our proxy always uses POST
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            serviceUrl,
-            path,
-            method, // Pass the intended method to the proxy
-            payload: {},
-          }),
+          body: JSON.stringify({ serviceUrl, path, method, payload: {} }),
         });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Could not fetch models from the service.');
+        }
         const data = await response.json();
 
         let loadedModels = [];
         if (isOllama && data.models) {
-          // Adapt Ollama's response: { models: [{ name: 'llama3:latest', ... }] }
           loadedModels = data.models.map((m: any) => ({ id: m.name }));
         } else if (!isOllama && data.data) {
-          // Use vLLM's response: { data: [{ id: 'meta-llama/Meta-Llama-3-8B-Instruct', ... }] }
           loadedModels = data.data;
         }
 
         setModels(loadedModels);
+        
+        let modelToLoad = '';
         if (loadedModels.length > 0) {
-          // If a configured model is provided and it exists in the list, select it.
-          // Otherwise, default to the first model.
-          const modelExists = loadedModels.some((m: Model) => m.id === configuredModel);
-          if (configuredModel && modelExists) {
-            setSelectedModel(configuredModel);
-          } else {
-            setSelectedModel(loadedModels[0].id);
-          }
+          const modelExists = loadedModels.some((m: any) => m.id === configuredModel);
+          modelToLoad = (configuredModel && modelExists) ? configuredModel : loadedModels[0].id;
+          setSelectedModel(modelToLoad);
+        } else {
+            throw new Error('No models found on the service.');
         }
 
-      } catch (error) {
+        if (isOllama && modelToLoad) {
+            await loadAndVerifyModel(modelToLoad);
+        } else if (!isOllama && loadedModels.length > 0) {
+            setIsModelReady(true); // For vLLM, assume it's ready after fetching models if models are found
+        } else if (!isOllama && loadedModels.length === 0) {
+            throw new Error('No models found on the vLLM service.');
+        }
+
+      } catch (error: any) {
         console.error('Failed to fetch models:', error);
+        setError(error.message);
       } finally {
         setIsLoadingModels(false);
       }
     };
 
-    fetchModels();
+    fetchModelsAndLoad();
   }, [serviceUrl, modelSource, configuredModel]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -179,6 +217,21 @@ export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { service
     }
   }, [messages]);
 
+  if (!isModelReady) {
+      return (
+          <div className="p-6 text-center">
+              {error ? (
+                  <p className="text-red-500">{error}</p>
+              ) : (
+                  <>
+                    <p className="text-gray-600">{modelLoadingMessage}</p>
+                    <p className="text-sm text-gray-500 mt-2">This is expected during a cold start.</p>
+                  </>
+              )}
+          </div>
+      );
+  }
+
   return (
     <div className="bg-white border border-gray-200 rounded-md">
       <div className="p-4 border-b"><h2 className="text-base font-medium">Chat with LLM</h2></div>
@@ -190,8 +243,9 @@ export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { service
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
             className="flex-grow p-2 border border-gray-300 rounded-md"
+            disabled={isLoadingModels || !isModelReady}
           >
-            {models.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
+            {models.map((m: any) => <option key={m.id} value={m.id}>{m.id}</option>)}
           </select>
         </div>
         <div ref={chatContainerRef} className="h-64 overflow-y-auto border border-gray-200 rounded-md p-2 mb-4 bg-gray-50">
@@ -211,9 +265,9 @@ export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { service
               onChange={(e) => setInputValue(e.target.value)}
               placeholder="Type your message..."
               className="flex-grow p-2 border border-gray-300 rounded-md"
-              disabled={isLoading}
+              disabled={isLoading || !isModelReady}
             />
-            <button type="submit" disabled={isLoading} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400">
+            <button type="submit" disabled={isLoading || !isModelReady} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400">
               {isLoading ? 'Thinking...' : 'Send'}
             </button>
           </div>
