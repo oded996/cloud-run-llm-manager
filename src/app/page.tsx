@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useState, useEffect, Suspense, useCallback } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import Header from "./components/header/header.component";
 import Sidebar, { View } from './components/sidebar/sidebar.component';
 import General, { Project } from './components/general/general.component';
@@ -9,6 +9,7 @@ import Models from './components/models/models.component';
 import Services from './components/services/services.component';
 
 function HomeContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const viewFromUrl = searchParams.get('view') as View | null;
 
@@ -16,6 +17,7 @@ function HomeContent() {
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [isProjectLoading, setIsProjectLoading] = useState(true);
+  const [navigationKey, setNavigationKey] = useState(Date.now());
 
   // Centralized project initialization
   useEffect(() => {
@@ -67,6 +69,11 @@ function HomeContent() {
     }
   }, [viewFromUrl, isProjectLoading]);
 
+  const handleNavigation = useCallback((view: View) => {
+    setNavigationKey(Date.now()); // Update key to force re-mount
+    router.push(`/?view=${view}`);
+  }, [router]);
+
   const renderContent = () => {
     if (isProjectLoading) {
         return <div className="p-6">Loading project...</div>;
@@ -75,9 +82,9 @@ function HomeContent() {
         case 'general':
             return <General selectedProject={selectedProject} onProjectSelect={setSelectedProject} />;
         case 'models':
-            return <Models selectedProject={selectedProject} />;
+            return <Models key={navigationKey} selectedProject={selectedProject} />;
         case 'services':
-            return <Services selectedProject={selectedProject} />;
+            return <Services key={navigationKey} selectedProject={selectedProject} />;
         default:
             return <General selectedProject={selectedProject} onProjectSelect={setSelectedProject} />;
     }
@@ -91,6 +98,7 @@ function HomeContent() {
           activeView={activeView}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!isSidebarCollapsed)}
+          onNavigate={handleNavigation}
         />
         <div className="flex-1">
           {renderContent()}

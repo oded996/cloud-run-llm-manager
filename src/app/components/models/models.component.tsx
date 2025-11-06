@@ -1288,6 +1288,9 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                         if (json.creationStarted) {
                             setDeployProgress(prev => [...prev, { message: `Service ${isEditMode ? 'updated' : 'deployed'} successfully. Redirecting...` }]);
                             setTimeout(() => {
+                                if (isEditMode) {
+                                    onClose();
+                                }
                                 router.push(`/?view=services&service=${json.serviceName}&region=${json.region}`);
                             }, 5000); // Wait 5 seconds before redirecting
                             reader.cancel();
@@ -1574,6 +1577,7 @@ const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick,
                 <th className="p-3 font-medium text-gray-600">Status</th>
                 <th className="p-3 font-medium text-gray-600">Source</th>
                 <th className="p-3 font-medium text-gray-600">Bucket</th>
+                <th className="p-3 font-medium text-gray-600">Region</th>
                 <th className="p-3 font-medium text-gray-600">Size</th>
                 <th className="p-3 font-medium text-gray-600"></th>
               </tr>
@@ -1594,6 +1598,7 @@ const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick,
                     </td>
                     <td className="p-3 text-gray-800">{model.source}</td>
                     <td className="p-3 text-gray-800">{model.bucketName}</td>
+                    <td className="p-3 text-gray-800">{model.bucketLocation.toLowerCase()}</td>
                     <td className="p-3 text-gray-800">{model.size ? formatBytes(model.size) : 'N/A'}</td>
                     <td className="p-3 text-right">
                       {model.status === 'completed' && (
