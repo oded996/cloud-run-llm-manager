@@ -1050,9 +1050,10 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
             setContainerPort('8000');
             setArgs([
                 { id: 1, key: '--model', value: `/gcs/${bucket.name}/${model.id}` },
-                { id: 2, key: '--tensor-parallel-size', value: '1' },
-                { id: 3, key: '--port', value: '8000' },
-                { id: 4, key: '--gpu-memory-utilization', value: '0.80' },
+                { id: 2, key: '--load-format', value: 'runai_streamer' },
+                { id: 3, key: '--tensor-parallel-size', value: '1' },
+                { id: 4, key: '--port', value: '8000' },
+                { id: 5, key: '--gpu-memory-utilization', value: '0.80' },
             ]);
             setEnvVars([
                 { id: 1, key: 'HF_HUB_OFFLINE', value: '1' },
