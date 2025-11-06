@@ -942,6 +942,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
     
     const regionConfig = SUPPORTED_REGIONS.find(r => r.name === bucket.location.toLowerCase());
     const [gpu, setGpu] = useState(regionConfig?.gpus[0]?.accelerator || '');
+    const [concurrency, setConcurrency] = useState(8);
     const [vramWarning, setVramWarning] = useState<string | null>(null);
 
     useEffect(() => {
@@ -949,6 +950,14 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
         if (selectedGpuConfig) {
             setCpu(selectedGpuConfig.validCpus[0]);
             setMemory(selectedGpuConfig.validMemory[0]);
+            // Set default concurrency based on GPU
+            if (selectedGpuConfig.name.includes('L4')) {
+                setConcurrency(6);
+            } else if (selectedGpuConfig.name.includes('H100') || selectedGpuConfig.name.includes('RTX 6000')) {
+                setConcurrency(12);
+            } else {
+                setConcurrency(8);
+            }
         }
 
         if (selectedGpuConfig && model.size) {
@@ -1029,10 +1038,11 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
             setContainerPort('11434');
             setArgs([]);
             setEnvVars([
-                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama/models` },
+                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama` },
                 { id: 2, key: 'OLLAMA_DEBUG', value: 'false' },
                 { id: 3, key: 'OLLAMA_KEEP_ALIVE', value: '-1' },
                 { id: 4, key: 'MODEL', value: model.id },
+                { id: 5, key: 'OLLAMA_NUM_PARALLEL', value: concurrency.toString() },
             ]);
         } else { // Default to vLLM for huggingface
             setServiceName(`vllm-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
@@ -1043,13 +1053,20 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                 { id: 2, key: '--tensor-parallel-size', value: '1' },
                 { id: 3, key: '--port', value: '8000' },
                 { id: 4, key: '--gpu-memory-utilization', value: '0.80' },
-                { id: 5, key: '--max-num-seqs', value: '128' },
             ]);
             setEnvVars([
                 { id: 1, key: 'HF_HUB_OFFLINE', value: '1' },
             ]);
         }
     }, [selectedSubnet, subnets]);
+
+    useEffect(() => {
+        if (model.source === 'ollama') {
+            setEnvVars(prev => prev.map(env => 
+                env.key === 'OLLAMA_NUM_PARALLEL' ? { ...env, value: concurrency.toString() } : env
+            ));
+        } 
+    }, [concurrency, model.source]);
 
     const handleEnablePga = async () => {
         if (!project || !selectedSubnet) return;
@@ -1196,6 +1213,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
             name: `projects/${project.projectId}/locations/${bucket.location.toLowerCase()}/services/${serviceName}`,
             template: {
                 ...(isEditMode ? existingService?.template : {}),
+                maxInstanceRequestConcurrency: concurrency,
                 timeout: { seconds: isEditMode ? (typeof existingService?.template?.timeout === 'string' ? parseInt(existingService.template.timeout, 10) : existingService?.template?.timeout?.seconds) || 300 : 300 },
                 gpuZonalRedundancyDisabled: gpuZonalRedundancyDisabled,
                 scaling: { minInstanceCount: minInstances, maxInstanceCount: maxInstances },
@@ -1376,6 +1394,21 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                                 <input type="checkbox" checked={gpuZonalRedundancyDisabled} onChange={e => setGpuZonalRedundancyDisabled(e.target.checked)} className="form-checkbox" />
                                 <span className="ml-2 text-sm text-gray-700">Disable GPU zonal redundancy (cost saving)</span>
                             </label>
+                        </div>
+                    </div>
+
+                    {/* Concurrency */}
+                    <div className="border-b border-gray-200 pb-6">
+                        <h2 className="text-base font-semibold text-gray-800 mb-4">Concurrency</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Max concurrent requests per instance</label>
+                                <input type="number" value={concurrency} onChange={e => setConcurrency(parseInt(e.target.value, 10))} className="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                            </div>
+                            <div className="text-sm text-gray-600 mt-1">
+                                <p>This sets how many requests one instance of your service can handle at the same time.</p>
+                                <p className="mt-2">A lower value may improve performance for each request, while a higher value increases throughput. Cloud Run uses this value to decide when to autoscale and add new instances.</p>
+                            </div>
                         </div>
                     </div>
 
