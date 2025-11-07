@@ -173,7 +173,7 @@ const GpuAvailability = ({ selectedProject }: GpuAvailabilityProps) => {
               <h3 className="text-sm font-semibold text-gray-900">{config.name}</h3>
               <div className="flex space-x-4 text-xs text-gray-600 mt-1">
                 <span><strong>VRAM:</strong> {config.vram_gb} GB</span>
-                <span><strong>Memory Bandwidth:</strong> {config.memory_bandwidth_gb_s} GB/s</span>
+                <span><strong>Memory Bandwidth:</strong> {(config.memory_bandwidth_gb_s / 1000).toFixed(2)} TB/s</span>
               </div>
             </div>
             <div className="overflow-x-auto">
