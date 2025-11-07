@@ -1,11 +1,13 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import GpuAvailability from './gpu-availability.component';
 
 interface Identity {
   type: string;
   email: string;
 }
+
 
 export interface Project {
   projectId: string;
@@ -320,6 +322,9 @@ const General = ({ selectedProject, onProjectSelect }: GeneralProps) => {
           )}
         </div>
       </div>
+
+      {/* GPU Availability */}
+      <GpuAvailability selectedProject={selectedProject} />
     </div>
   );
 };
