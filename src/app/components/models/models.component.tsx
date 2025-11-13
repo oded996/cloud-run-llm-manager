@@ -944,6 +944,45 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
     const [concurrency, setConcurrency] = useState(8);
     const [vramWarning, setVramWarning] = useState<string | null>(null);
 
+    const [quota, setQuota] = useState<{ nonZonalLimit: string, zonalLimit: string } | null>(null);
+    const [isQuotaLoading, setIsQuotaLoading] = useState(false);
+    const [quotaError, setQuotaError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const fetchQuota = async () => {
+            if (!project || !gpu) return;
+            setIsQuotaLoading(true);
+            setQuotaError(null);
+            try {
+                const response = await fetch('/api/project/quota', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        projectId: project.projectId,
+                        region: bucket.location.toLowerCase(),
+                        gpuAccelerator: gpu,
+                    }),
+                });
+                const data = await response.json();
+                if (!response.ok || data.error) {
+                    if (data.error === 'API_DISABLED') {
+                        setQuotaError(`The Cloud Quotas API is not enabled.`);
+                    } else {
+                        throw new Error(data.error || 'Failed to fetch quota.');
+                    }
+                } else {
+                    setQuota(data);
+                }
+            } catch (err: any) {
+                setQuotaError(err.message);
+            } finally {
+                setIsQuotaLoading(false);
+            }
+        };
+
+        fetchQuota();
+    }, [project, gpu, bucket.location]);
+
     useEffect(() => {
         const selectedGpuConfig = regionConfig?.gpus.find(g => g.accelerator === gpu);
         if (selectedGpuConfig) {
@@ -1397,6 +1436,40 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                                 <input type="checkbox" checked={gpuZonalRedundancyDisabled} onChange={e => setGpuZonalRedundancyDisabled(e.target.checked)} className="form-checkbox" />
                                 <span className="ml-2 text-sm text-gray-700">Disable GPU zonal redundancy (cost saving)</span>
                             </label>
+                        </div>
+                        <div className="mt-4 pt-4 border-t border-gray-200 text-sm">
+                            {isQuotaLoading ? <p className="text-gray-500">Checking quota...</p> :
+                             quotaError ? <p className="text-red-500">{quotaError} <a href="https://console.cloud.google.com/apis/library/cloudquotas.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Enable API</a></p> :
+                             quota && (
+                                <div className="flex items-center space-x-2">
+                                    {(() => {
+                                        const availableQuota = gpuZonalRedundancyDisabled ? parseInt(quota.nonZonalLimit, 10) : parseInt(quota.zonalLimit, 10);
+                                        const effectiveMinInstances = minInstances === 0 ? 1 : minInstances;
+                                        const hasSufficientQuota = availableQuota >= effectiveMinInstances && availableQuota >= maxInstances;
+                                        return hasSufficientQuota ? <GreenCheckIcon /> : <RedXIcon />;
+                                    })()}
+                                    <span>
+                                        Quota: {gpuZonalRedundancyDisabled ? quota.nonZonalLimit : quota.zonalLimit} available.
+                                        {(() => {
+                                            const availableQuota = gpuZonalRedundancyDisabled ? parseInt(quota.nonZonalLimit, 10) : parseInt(quota.zonalLimit, 10);
+                                            const effectiveMinInstances = minInstances === 0 ? 1 : minInstances;
+                                            if (availableQuota < effectiveMinInstances) {
+                                                return <span className="text-red-500 ml-2">Insufficient quota for {effectiveMinInstances} min instances.</span>;
+                                            } else if (availableQuota < maxInstances) {
+                                                return <span className="text-red-500 ml-2">Insufficient quota for {maxInstances} max instances.</span>;
+                                            }
+                                            return null;
+                                        })()}
+                                    </span>
+                                    {(() => {
+                                        const availableQuota = gpuZonalRedundancyDisabled ? parseInt(quota.nonZonalLimit, 10) : parseInt(quota.zonalLimit, 10);
+                                        const effectiveMinInstances = minInstances === 0 ? 1 : minInstances;
+                                        const needsQuotaRequest = availableQuota < effectiveMinInstances || availableQuota < maxInstances;
+                                        return needsQuotaRequest && <a href="https://g.co/cloudrun/gpu-quota" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Request Quota</a>;
+                                    })()}
+                                </div>
+                             )
+                            }
                         </div>
                     </div>
 

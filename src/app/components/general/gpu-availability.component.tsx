@@ -156,10 +156,10 @@ const GpuAvailability = ({ selectedProject }: GpuAvailabilityProps) => {
 
         {hasApiError && (
           <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md text-sm">
-            {hasApiError.error === 'API_DISABLED' && hasApiError.activationUrl ? (
+            {hasApiError.error === 'API_DISABLED' ? (
               <>
                 <span className="text-yellow-800">The Cloud Quotas API is not enabled for this project.</span>
-                <a href={hasApiError.activationUrl} target="_blank" rel="noopener noreferrer" className="ml-2 text-blue-600 hover:underline font-medium">Enable API</a>
+                <a href="https://console.cloud.google.com/apis/library/cloudquotas.googleapis.com" target="_blank" rel="noopener noreferrer" className="ml-2 text-blue-600 hover:underline font-medium">Enable API</a>
               </>
             ) : (
               <span className="text-yellow-800">Could not retrieve quota information. Please ensure you have the "Service Usage Viewer" (`roles/serviceusage.serviceUsageViewer`) role.</span>

@@ -53,8 +53,29 @@ export async function POST(request: Request) {
         client.getQuotaInfo({ name: zonalName }),
       ]);
 
-      const nonZonalLimit = nonZonalResult.status === 'fulfilled' ? getRegionalQuota(nonZonalResult.value[0], region) : '0';
-      const zonalLimit = zonalResult.status === 'fulfilled' ? getRegionalQuota(zonalResult.value[0], region) : '0';
+      // Check for rejected promises specifically for API_DISABLED error
+      for (const result of [nonZonalResult, zonalResult]) {
+        if (result.status === 'rejected') {
+          const reason = result.reason as any;
+          if (reason?.errorInfoMetadata?.reason === 'SERVICE_DISABLED' || reason?.reason === 'SERVICE_DISABLED') {
+            return NextResponse.json({
+              error: 'API_DISABLED',
+              // The activation URL might be in different places depending on the error structure
+              activationUrl: reason?.errorInfoMetadata?.activationUrl || `https://console.developers.google.com/apis/api/cloudquotas.googleapis.com/overview?project=${projectId}`,
+            });
+          }
+        }
+      }
+
+      let nonZonalLimit = nonZonalResult.status === 'fulfilled' ? getRegionalQuota(nonZonalResult.value[0], region) : '0';
+      let zonalLimit = zonalResult.status === 'fulfilled' ? getRegionalQuota(zonalResult.value[0], region) : '0';
+
+      // For RTX 6000 GPUs, quota is measured in milli-gpus (1000 units = 1 GPU).
+      // We divide by 1000 to normalize it to the number of GPUs.
+      if (gpuAccelerator === 'nvidia-rtx-pro-6000') {
+        nonZonalLimit = (parseInt(nonZonalLimit, 10) / 1000).toString();
+        zonalLimit = (parseInt(zonalLimit, 10) / 1000).toString();
+      }
 
       return NextResponse.json({ nonZonalLimit, zonalLimit });
 
