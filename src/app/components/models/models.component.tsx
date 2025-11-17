@@ -1076,7 +1076,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
             setContainerPort('11434');
             setArgs([]);
             setEnvVars([
-                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama` },
+                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama/models` },
                 { id: 2, key: 'OLLAMA_DEBUG', value: 'false' },
                 { id: 3, key: 'OLLAMA_KEEP_ALIVE', value: '-1' },
                 { id: 4, key: 'MODEL', value: model.id },
