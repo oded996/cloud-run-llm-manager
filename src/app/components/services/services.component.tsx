@@ -223,11 +223,18 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
     type Tab = 'details' | 'logs' | 'permissions' | 'chat';
     const [activeTab, setActiveTab] = useState<Tab>(tabFromUrl || 'details');
 
+    interface LogEntry {
+        timestamp: string;
+        level: string;
+        message: string;
+        receiveTimestamp: string;
+    }
+
     const [service, setService] = useState<Service | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     
-    const [logs, setLogs] = useState<any[]>([]);
+    const [logs, setLogs] = useState<LogEntry[]>([]);
     const [logError, setLogError] = useState<string | null>(null);
     const [isLogsRefreshing, setIsLogsRefreshing] = useState(false);
     const logContainerRef = useRef<HTMLDivElement>(null);
@@ -268,7 +275,7 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
         }
     }, [status, fetchServiceDetails]);
 
-    const pollIntervalRef = useRef<number>(1500);
+    const pollIntervalRef = useRef<number>(2500);
     const pollTimeoutId = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
@@ -281,28 +288,43 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
         }
     }, [activeTab]);
 
-    const fetchLogs = useCallback(async () => {
+    const fetchLogs = useCallback(async (isManualRefresh = false) => {
         if (pollTimeoutId.current) clearTimeout(pollTimeoutId.current);
         setIsLogsRefreshing(true);
         try {
             let url = `/api/services/logs?projectId=${project.projectId}&region=${region}&serviceName=${serviceName}`;
-            if (lastLogTimestamp.current) url += `&since=${lastLogTimestamp.current}`;
+            if (lastLogTimestamp.current && !isManualRefresh) {
+                url += `&since=${lastLogTimestamp.current}`;
+            } else if (!isManualRefresh) {
+                // For initial load, get last 2 mins
+                const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toJSON();
+                url += `&since=${twoMinutesAgo}`;
+            }
+            // If it is a manual refresh, we don't add `since` and fetch all recent logs.
+            if (isManualRefresh) {
+                setLogs([]);
+                lastLogTimestamp.current = null;
+            }
+
             const response = await fetch(url);
             if (!response.ok) {
                 const errorData = await response.json();
                 throw new Error(errorData.error || 'Failed to fetch logs.');
             }
-            pollIntervalRef.current = 1500; // Poll every 1.5 seconds when the tab is active
+            pollIntervalRef.current = 2500;
             setLogError(null);
-            const newLogs = await response.json();
+            const newLogs: LogEntry[] = await response.json();
             if (newLogs.length > 0) {
                 const logContainer = logContainerRef.current;
                 const shouldScroll = logContainer ? (logContainer.scrollTop + logContainer.clientHeight) >= logContainer.scrollHeight - 20 : false;
+                
                 const lastLog = newLogs[newLogs.length - 1];
-                if (lastLog?.timestamp?.seconds) {
-                    lastLogTimestamp.current = new Date(lastLog.timestamp.seconds * 1000 + (lastLog.timestamp.nanos || 0) / 1e6).toJSON();
+                if (lastLog?.receiveTimestamp) {
+                    lastLogTimestamp.current = lastLog.receiveTimestamp;
                 }
+
                 setLogs(prev => [...prev, ...newLogs].slice(-3000));
+
                 if (shouldScroll && logContainer) {
                     setTimeout(() => { logContainer.scrollTop = logContainer.scrollHeight; }, 100);
                 }
@@ -313,18 +335,17 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
             setLogError(`${userMessage} Retrying...`);
             pollIntervalRef.current = Math.min(pollIntervalRef.current * 2, 60000);
         } finally {
-            pollTimeoutId.current = setTimeout(fetchLogs, pollIntervalRef.current);
+            // Only schedule the next poll if the logs tab is still active.
+            if (activeTab === 'logs') {
+                pollTimeoutId.current = setTimeout(() => fetchLogs(false), pollIntervalRef.current);
+            }
             setIsLogsRefreshing(false);
         }
-    }, [project.projectId, region, serviceName]);
+    }, [project.projectId, region, serviceName, activeTab]);
 
     useEffect(() => {
         if (activeTab === 'logs') {
-            if (!lastLogTimestamp.current) {
-                const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toJSON();
-                lastLogTimestamp.current = twoMinutesAgo;
-            }
-            fetchLogs();
+            fetchLogs(false); // Initial fetch
             return () => {
                 if (pollTimeoutId.current) clearTimeout(pollTimeoutId.current);
             };
@@ -349,6 +370,17 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
     const modelSource = container?.image?.includes('ollama') ? 'ollama' : 'huggingface';
     const configuredModel = container?.env?.find(e => e.name === 'MODEL')?.value;
 
+    const getLogLevelColor = (level: string) => {
+        if (!level) return 'text-gray-200'; // Prevent crash if level is undefined
+        switch (level.toUpperCase()) {
+            case 'DEBUG': return 'text-gray-400';
+            case 'INFO': return 'text-blue-400';
+            case 'WARNING': return 'text-yellow-400';
+            case 'ERROR': return 'text-red-400';
+            default: return 'text-gray-200';
+        }
+    };
+
     const renderTabContent = () => {
         switch (activeTab) {
             case 'details':
@@ -358,18 +390,20 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
                     <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
                         <div className="p-4 border-b flex justify-between items-center">
                             <h2 className="text-base font-medium">Live Logs</h2>
-                            <button onClick={() => fetchLogs()} disabled={isLogsRefreshing} className="p-1 rounded-full text-gray-500 hover:bg-gray-100 disabled:text-gray-300" title="Refresh logs">
+                            <button onClick={() => fetchLogs(true)} disabled={isLogsRefreshing} className="p-1 rounded-full text-gray-500 hover:bg-gray-100 disabled:text-gray-300" title="Refresh logs">
                                 <RefreshIcon isRefreshing={isLogsRefreshing} />
                             </button>
                         </div>
                         <div ref={logContainerRef} className="p-4 font-mono text-xs h-96 overflow-y-auto bg-gray-900 text-white rounded-b-md whitespace-pre-wrap break-all">
                             {logError && <p className="text-yellow-400">{logError}</p>}
                             {logs.map((log, i) => (
-                                <p key={i}>
-                                    <span className="text-gray-400">
-                                        {new Date((log.timestamp?.seconds || 0) * 1000 + (log.timestamp?.nanos || 0) / 1e6).toLocaleString()}
-                                    </span>: {typeof log.message === "object" ? JSON.stringify(log.message) : log.message}
-                                </p>
+                                <div key={i} className="flex items-start">
+                                    <span className="text-gray-500 whitespace-nowrap">{log.timestamp}</span>
+                                    <span className={`font-bold w-20 px-2 flex-shrink-0 ${getLogLevelColor(log.level)}`}>
+                                        [{log.level || 'DEFAULT'}]
+                                    </span>
+                                    <span className="flex-1">{log.message}</span>
+                                </div>
                             ))}
                         </div>
                     </div>
