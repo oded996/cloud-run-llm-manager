@@ -38,7 +38,10 @@ export async function POST(request: Request) {
       };
     }
 
-    const existingModelIndex = metadata.models.findIndex((m: { id: string }) => m.id === modelId);
+    // Clean up any previous attempts for this model before adding the new one.
+    // This ensures we don't have duplicate or stuck entries.
+    metadata.models = metadata.models.filter((m: { id: string }) => m.id !== modelId);
+
     const modelData = {
       id: modelId,
       source: 'huggingface',
@@ -47,11 +50,7 @@ export async function POST(request: Request) {
       submittedAt: new Date().toISOString(),
     };
 
-    if (existingModelIndex > -1) {
-      metadata.models[existingModelIndex] = { ...metadata.models[existingModelIndex], ...modelData };
-    } else {
-      metadata.models.push(modelData);
-    }
+    metadata.models.push(modelData);
 
     await metadataFile.save(JSON.stringify(metadata, null, 2), {
       contentType: 'application/json',

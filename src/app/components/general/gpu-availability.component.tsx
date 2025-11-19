@@ -1,7 +1,7 @@
 // src/app/components/general/gpu-availability.component.tsx
 'use client';
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { SUPPORTED_REGIONS, GpuConfig } from '@/app/config/regions';
 import { Project } from './general.component';
 
@@ -28,63 +28,65 @@ interface Quota {
 const GpuAvailability = ({ selectedProject }: GpuAvailabilityProps) => {
   const [quotaData, setQuotaData] = useState<{ [key: string]: Quota }>({});
   const [isLoadingQuota, setIsLoadingQuota] = useState(false);
-  const [hasApiError, setHasApiError] = useState<Quota | null>(null);
+  const [hasApiError, setHasApiError] = useState<{ message: string, activationUrl?: string } | null>(null);
 
+  const fetchAllQuotas = useCallback(async () => {
+    if (!selectedProject) {
+      setQuotaData({});
+      return;
+    }
 
-  useEffect(() => {
-    const fetchQuota = async () => {
-      if (!selectedProject) return;
+    setIsLoadingQuota(true);
+    setHasApiError(null);
+    setQuotaData({});
 
-      setIsLoadingQuota(true);
-      setHasApiError(null);
-      const newQuotaData: { [key: string]: Quota } = {};
+    const regionsWithGpus = SUPPORTED_REGIONS.filter(r => r.gpus.length > 0);
 
-      const allGpuRequests = SUPPORTED_REGIONS.flatMap(region =>
-        region.gpus.map(gpu => ({
-          key: `${region.name}-${gpu.accelerator}`,
-          region: region.name,
-          gpuAccelerator: gpu.accelerator,
-        }))
+    try {
+      const promises = regionsWithGpus.map(region =>
+        fetch('/api/project/quota', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            projectId: selectedProject.projectId,
+            region: region.name,
+          }),
+        }).then(res => res.json().then(data => ({ region: region.name, data })))
       );
 
-      for (const req of allGpuRequests) {
-        // If we already have a global error (like API_DISABLED), don't send more requests.
-        if (hasApiError) continue;
+      const results = await Promise.all(promises);
 
-        try {
-          const response = await fetch('/api/project/quota', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              projectId: selectedProject.projectId,
-              region: req.region,
-              gpuAccelerator: req.gpuAccelerator,
-            }),
-          });
+      const newQuotaData: { [key: string]: Quota } = {};
+      let apiDisabledErrorFound = false;
 
-          const data: Quota = await response.json();
-
-          if (data.error) {
-            // If there's a global error (API disabled or permission denied), stop fetching.
-            if (data.error === 'API_DISABLED' || data.error === 'Permission Denied') {
-              setHasApiError(data);
-              break; // Exit the loop
-            }
-          }
-          newQuotaData[req.key] = data;
-
-        } catch (error) {
-          console.error('Error fetching quota:', error);
-          newQuotaData[req.key] = { error: 'Error' };
+      for (const result of results) {
+        if (result.data.error === 'API_DISABLED') {
+          setHasApiError({ message: 'API_DISABLED', activationUrl: result.data.activationUrl });
+          apiDisabledErrorFound = true;
+          break; 
+        }
+        if (result.data.quotas) {
+           result.data.quotas.forEach((q: Quota & { gpu: string }) => {
+              const key = `${result.region}-${q.gpu}`;
+              newQuotaData[key] = q;
+           });
         }
       }
 
-      setQuotaData(newQuotaData);
-      setIsLoadingQuota(false);
-    };
+      if (!apiDisabledErrorFound) {
+        setQuotaData(newQuotaData);
+      }
 
-    fetchQuota();
+    } catch (err: any) {
+      setHasApiError({ message: err.message || 'An unexpected error occurred while fetching quotas.' });
+    } finally {
+      setIsLoadingQuota(false);
+    }
   }, [selectedProject]);
+
+  useEffect(() => {
+    fetchAllQuotas();
+  }, [fetchAllQuotas]);
 
   const gpusWithRegions = useMemo(() => {
     const gpuMap: { [key: string]: GpuDetails } = {};
@@ -156,7 +158,7 @@ const GpuAvailability = ({ selectedProject }: GpuAvailabilityProps) => {
 
         {hasApiError && (
           <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md text-sm">
-            {hasApiError.error === 'API_DISABLED' ? (
+            {hasApiError.message === 'API_DISABLED' ? (
               <>
                 <span className="text-yellow-800">The Cloud Quotas API is not enabled for this project.</span>
                 <a href="https://console.cloud.google.com/apis/library/cloudquotas.googleapis.com" target="_blank" rel="noopener noreferrer" className="ml-2 text-blue-600 hover:underline font-medium">Enable API</a>

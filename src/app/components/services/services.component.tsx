@@ -239,6 +239,19 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
     const [isLogsRefreshing, setIsLogsRefreshing] = useState(false);
     const logContainerRef = useRef<HTMLDivElement>(null);
     const lastLogTimestamp = useRef<string | null>(null);
+    const pollTimeoutId = useRef<NodeJS.Timeout | null>(null);
+    const isMountedRef = useRef(true); // Ref to track mounted state
+
+    // This effect runs once on mount and cleanup on unmount
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+            if (pollTimeoutId.current) {
+                clearTimeout(pollTimeoutId.current);
+            }
+        };
+    }, []);
 
     const region = serviceFullName.split('/')[3];
     const serviceName = serviceFullName.split('/')[5];
@@ -276,7 +289,6 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
     }, [status, fetchServiceDetails]);
 
     const pollIntervalRef = useRef<number>(2500);
-    const pollTimeoutId = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
         if (activeTab === 'logs' && logContainerRef.current) {
@@ -335,8 +347,8 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
             setLogError(`${userMessage} Retrying...`);
             pollIntervalRef.current = Math.min(pollIntervalRef.current * 2, 60000);
         } finally {
-            // Only schedule the next poll if the logs tab is still active.
-            if (activeTab === 'logs') {
+            // Only schedule the next poll if the component is still mounted AND the logs tab is active.
+            if (isMountedRef.current && activeTab === 'logs') {
                 pollTimeoutId.current = setTimeout(() => fetchLogs(false), pollIntervalRef.current);
             }
             setIsLogsRefreshing(false);
@@ -346,9 +358,11 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
     useEffect(() => {
         if (activeTab === 'logs') {
             fetchLogs(false); // Initial fetch
-            return () => {
-                if (pollTimeoutId.current) clearTimeout(pollTimeoutId.current);
-            };
+        } else {
+            // If the tab is not 'logs', clear any pending timeout.
+            if (pollTimeoutId.current) {
+                clearTimeout(pollTimeoutId.current);
+            }
         }
     }, [activeTab, fetchLogs]);
 

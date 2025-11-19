@@ -1597,7 +1597,7 @@ const RefreshIcon = ({ isRefreshing }: { isRefreshing: boolean }) => (
 
 const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick, onDeployClick, onViewProgressClick, isRefreshing, onRefresh }: { selectedProject: Project | null, buckets: Bucket[], isLoading: boolean, error: string | null, onImportClick: () => void, onDeployClick: (model: Model, bucket: Bucket) => void, onViewProgressClick: (model: Model, bucket: Bucket) => void, isRefreshing: boolean, onRefresh: () => void }) => {
 
-  const allModels = buckets.flatMap(bucket => 
+  const allModelsRaw = buckets.flatMap(bucket => 
     bucket.models.map(model => ({
       ...model,
       bucketName: bucket.name,
@@ -1605,6 +1605,8 @@ const ModelsList = ({ selectedProject, buckets, isLoading, error, onImportClick,
       originalBucket: bucket,
     }))
   );
+
+  const allModels = allModelsRaw;
 
   return (
     <div className="p-6">
