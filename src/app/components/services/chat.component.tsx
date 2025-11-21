@@ -15,7 +15,7 @@ interface Message {
   content: string;
 }
 
-export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { serviceUrl: string, modelSource: 'ollama' | 'huggingface', configuredModel?: string }) => {
+export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { serviceUrl: string, modelSource: 'ollama' | 'huggingface' | 'zml', configuredModel?: string }) => {
   const [models, setModels] = useState<any[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [isLoadingModels, setIsLoadingModels] = useState(true);
@@ -38,9 +38,9 @@ export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { service
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     serviceUrl,
-                    path: '/api/generate',
+                    path: '/v1/completions',
                     method: 'POST',
-                    payload: { model: modelToLoad, prompt: 'hello', stream: false },
+                    payload: { model: modelToLoad, prompt: 'hello', stream: false, max_tokens: 1 }, // Using completions for a lightweight ping
                 }),
             });
 
@@ -63,7 +63,8 @@ export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { service
       setError(null);
       try {
         const isOllama = modelSource === 'ollama';
-        const path = isOllama ? '/api/tags' : '/v1/models';
+        const isZML = modelSource === 'zml';
+        const path = isOllama ? '/api/tags' : '/v1/models'; // ZML uses /v1/models like vLLM
         const method = 'GET';
 
         const response = await fetch('/api/services/chat', {
@@ -81,7 +82,7 @@ export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { service
         let loadedModels = [];
         if (isOllama && data.models) {
           loadedModels = data.models.map((m: any) => ({ id: m.name }));
-        } else if (!isOllama && data.data) {
+        } else if ((!isOllama || isZML) && data.data) {
           loadedModels = data.data;
         }
 
@@ -98,10 +99,10 @@ export const ChatCard = ({ serviceUrl, modelSource, configuredModel }: { service
 
         if (isOllama && modelToLoad) {
             await loadAndVerifyModel(modelToLoad);
-        } else if (!isOllama && loadedModels.length > 0) {
-            setIsModelReady(true); // For vLLM, assume it's ready after fetching models if models are found
-        } else if (!isOllama && loadedModels.length === 0) {
-            throw new Error('No models found on the vLLM service.');
+        } else if ((!isOllama || isZML) && loadedModels.length > 0) {
+            setIsModelReady(true); // For vLLM/ZML, assume it's ready after fetching models if models are found
+        } else if ((!isOllama || isZML) && loadedModels.length === 0) {
+            throw new Error(`No models found on the ${modelSource} service.`);
         }
 
       } catch (error: any) {

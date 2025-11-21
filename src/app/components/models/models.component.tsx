@@ -870,6 +870,7 @@ interface Service {
         };
       };
     }[];
+    volumes?: { name: string; gcs: { bucket: string } }[];
   };
   terminalCondition: {
     type: string;
@@ -899,10 +900,10 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
             ? {
 
                 id: existingService.template.containers[0]?.args?.find(a => a.startsWith('--model='))?.split('=').slice(1).join('=').split('/').slice(3).join('/') || 
-
+                    existingService.template.containers[0]?.args?.find(a => a.startsWith('--model-dir='))?.split('=').slice(1).join('=').split('/').pop() ||
                     existingService.template.containers[0]?.env?.find(e => e.name === 'MODEL')?.value || '',
 
-                source: existingService.template.containers[0]?.image?.includes('ollama') ? 'ollama' : 'huggingface',
+                source: existingService.template.containers[0]?.image?.includes('ollama') ? 'ollama' : (existingService.template.containers[0]?.image?.includes('llmd') ? 'zml' : 'huggingface'),
 
                 size: 0, // Size is not critical for edit mode, default to 0
 
@@ -916,8 +917,8 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
 
             ? {
 
-                name: existingService.template.containers[0]?.args?.find(a => a.startsWith('--model='))?.split('=')[1].split('/')[2] || 
-
+                name: existingService.template.volumes?.find(v => v.gcs)?.gcs.bucket || 
+                      existingService.template.containers[0]?.args?.find(a => a.startsWith('--model='))?.split('=')[1].split('/')[2] || 
                       existingService.template.containers[0]?.env?.find(e => e.name === 'OLLAMA_MODELS')?.value.split('/')[2] || '',
 
                 location: existingService.name.split('/')[3],
@@ -933,6 +934,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
     const [serviceNameError, setServiceNameError] = useState<string | null>(null);
 
     const [isCheckingName, setIsCheckingName] = useState(false);
+    const [servingFramework, setServingFramework] = useState<'vllm' | 'zml'>(model.source === 'huggingface' ? 'vllm' : 'vllm'); // Default to vLLM for HF
     const [containerImage, setContainerImage] = useState('');
     const [containerPort, setContainerPort] = useState('');
     
@@ -1071,7 +1073,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
     useEffect(() => {
         if (isEditMode) return; // Don't reset values when editing
         if (model.source === 'ollama') {
-            setServiceName(`ollama-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
+            setServiceName(`ollama-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`.toLowerCase());
             setContainerImage('ollama/ollama');
             setContainerPort('11434');
             setArgs([]);
@@ -1082,8 +1084,16 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                 { id: 4, key: 'MODEL', value: model.id },
                 { id: 5, key: 'OLLAMA_NUM_PARALLEL', value: concurrency.toString() },
             ]);
+        } else if (servingFramework === 'zml') {
+             setServiceName(`zml-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`.toLowerCase());
+             setContainerImage('zmlai/llmd');
+             setContainerPort('8000');
+             setArgs([
+                 { id: 1, key: '--model-dir', value: `/model/${model.id}` },
+             ]);
+             setEnvVars([]);
         } else { // Default to vLLM for huggingface
-            setServiceName(`vllm-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
+            setServiceName(`vllm-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`.toLowerCase());
             setContainerImage('vllm/vllm-openai');
             setContainerPort('8000');
             setArgs([
@@ -1097,7 +1107,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                 { id: 1, key: 'HF_HUB_OFFLINE', value: '1' },
             ]);
         }
-    }, [selectedSubnet, subnets]);
+    }, [selectedSubnet, subnets, servingFramework]);
 
     useEffect(() => {
         if (model.source === 'ollama') {
@@ -1158,32 +1168,19 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
             } else {
                 setUseVpc(false);
             }
+            
+            // Detect framework for Edit Mode
+            if (container.image.includes('ollama')) {
+                // setModelSource('ollama') // This is derived from model prop usually
+            } else if (container.image.includes('llmd')) {
+                setServingFramework('zml');
+            } else {
+                setServingFramework('vllm');
+            }
 
         } else {
             // Pre-fill for new service
-            if (model.source === 'ollama') {
-                setServiceName(`ollama-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
-                setContainerImage('ollama/ollama');
-                            setContainerPort('11434');
-                            setArgs([]);
-                            setEnvVars([
-                                { id: 1, key: 'OLLAMA_MODELS', value: `/gcs/${bucket.name}/ollama` },
-                                { id: 2, key: 'OLLAMA_DEBUG', value: 'false' },
-                                { id: 3, key: 'OLLAMA_KEEP_ALIVE', value: '-1' },
-                                { id: 4, key: 'MODEL', value: model.id },
-                            ]);            } else { // vLLM
-                setServiceName(`vllm-${model.id.replace(/[^a-zA-Z0-9]/g, '-')}`);
-                setContainerImage('vllm/vllm-openai');
-                setContainerPort('8000');
-                setArgs([
-                    { id: 1, key: '--model', value: `/gcs/${bucket.name}/${model.id}` },
-                    { id: 2, key: '--tensor-parallel-size', value: '1' },
-                    { id: 3, key: '--port', value: '8000' },
-                    { id: 4, key: '--gpu-memory-utilization', value: '0.80' },
-                    { id: 5, key: '--max-num-seqs', value: '128' },
-                ]);
-                setEnvVars([ { id: 1, key: 'HF_HUB_OFFLINE', value: '1' } ]);
-            }
+            // The other useEffect handles this based on servingFramework state
         }
     }, [existingService]);
 
@@ -1244,6 +1241,8 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
         setDeployProgress([]);
 
         const endpoint = isEditMode ? '/api/services/update' : '/api/services/deploy';
+        
+        const mountPath = servingFramework === 'zml' ? '/model' : `/gcs/${bucket.name}`;
 
         // For updates, we need to send a "clean" service object containing only the
         // fields that are user-configurable. Sending back the full object we received
@@ -1270,7 +1269,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                     resources: { limits: { cpu, memory, 'nvidia.com/gpu': '1' } },
                     args: args.map(arg => `${arg.key}=${arg.value}`),
                     env: envVars.map(env => ({ name: env.key, value: env.value })),
-                    volumeMounts: [{ name: 'gcs-bucket', mountPath: `/gcs/${bucket.name}` }],
+                    volumeMounts: [{ name: 'gcs-bucket', mountPath: mountPath }],
                 }],
                 volumes: [{ name: 'gcs-bucket', gcs: { bucket: bucket.name, readOnly: true } }],
                 annotations: {
@@ -1361,6 +1360,31 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
                 </div>
 
                 <div className="space-y-8 bg-white border border-gray-200 rounded-md p-6">
+                    {/* Serving Framework Selection (Only for HF models) */}
+                    {!isEditMode && model.source === 'huggingface' && (
+                         <div className="border-b border-gray-200 pb-6">
+                            <h2 className="text-base font-semibold text-gray-800 mb-4">Serving Framework</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setServingFramework('vllm')}
+                                    className={`p-4 border rounded-md text-left transition-colors ${servingFramework === 'vllm' ? 'border-blue-600 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+                                >
+                                    <h3 className="font-medium text-gray-800">vLLM</h3>
+                                    <p className="text-xs text-gray-600 mt-1">High-throughput serving engine. Best for production traffic.</p>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setServingFramework('zml')}
+                                    className={`p-4 border rounded-md text-left transition-colors ${servingFramework === 'zml' ? 'border-blue-600 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`}
+                                >
+                                    <h3 className="font-medium text-gray-800">ZML (Beta)</h3>
+                                    <p className="text-xs text-gray-600 mt-1">Zig Machine Learning. Lightweight, OpenAI compatible.</p>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Service Details */}
                     <div className="border-b border-gray-200 pb-6">
                         <h2 className="text-base font-semibold text-gray-800 mb-4">Service Details</h2>

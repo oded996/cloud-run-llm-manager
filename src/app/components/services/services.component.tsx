@@ -381,8 +381,16 @@ const ServiceDetailView = ({ project, serviceFullName, onBack, onEdit }: { proje
 
     const consoleUrl = `https://console.cloud.google.com/run/detail/${region}/${serviceName}/revisions?project=${project.projectId}`;
     const container = service.template.containers[0];
-    const modelSource = container?.image?.includes('ollama') ? 'ollama' : 'huggingface';
-    const configuredModel = container?.env?.find(e => e.name === 'MODEL')?.value;
+    const modelSource = container?.image?.includes('ollama') ? 'ollama' : (container?.image?.includes('llmd') ? 'zml' : 'huggingface');
+
+    let configuredModel: string | undefined;
+    if (modelSource === 'ollama') {
+        configuredModel = container?.env?.find(e => e.name === 'MODEL')?.value;
+    } else if (modelSource === 'zml') {
+        configuredModel = container?.args?.find(a => a.startsWith('--model-dir=/model/'))?.split('/').pop();
+    } else { // huggingface (vLLM)
+        configuredModel = container?.args?.find(a => a.startsWith('--model='))?.split('=').slice(1).join('=').split('/').pop();
+    }
 
     const getLogLevelColor = (level: string) => {
         if (!level) return 'text-gray-200'; // Prevent crash if level is undefined
