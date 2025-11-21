@@ -97,16 +97,24 @@ Project: Cloud Run LLM Manager
 *   **Deploy Service View:** Clicking "Deploy" navigates to a new, dedicated view for service configuration with a card-based layout.
 *   **Services Dashboard:** The main view of the "Services" tab, which lists all Cloud Run services that have the `managed-by: llm-manager` label.
 
-**Functionality 1: Deploy New vLLM Service (Hugging Face)**
+**Functionality 1: Deploy New Service (Hugging Face)**
 
 This workflow begins when the user clicks the "Deploy" button for a Hugging Face model.
 
 *   **UI: Deploy Service View**
-    *   The view is pre-filled with default configurations for a vLLM deployment.
-    *   **Container Image:** Defaults to `vllm/vllm-openai`.
-    *   **Container Port:** Defaults to `8000`.
-    *   **Container Arguments:** Pre-filled with vLLM defaults (`--model`, `--tensor-parallel-size`, etc.).
-    *   **Environment Variables:** Pre-filled with `HF_HUB_OFFLINE=1`.
+    *   **Serving Framework Selection:** The user can choose between **vLLM** (default) and **ZML (Zig Machine Learning)**.
+    *   **Configuration:** The view is pre-filled with default configurations based on the selected framework.
+        *   **vLLM:**
+            *   **Container Image:** `vllm/vllm-openai`
+            *   **Port:** `8000`
+            *   **Args:** `--model`, `--tensor-parallel-size`, etc.
+            *   **Env:** `HF_HUB_OFFLINE=1`
+            *   **Mount:** `/gcs/[bucket-name]`
+        *   **ZML:**
+            *   **Container Image:** `zmlai/llmd`
+            *   **Port:** `8000`
+            *   **Args:** `--model-dir=/model/[model-id]`
+            *   **Mount:** `/model`
     *   **VPC Networking:** An optional card allowing the user to connect the service to a VPC for accelerated model loading from GCS.
         *   A toggle to enable or disable the VPC connection (defaults to enabled).
         *   A dropdown to select an available subnet in the service's region. It defaults to the `default` subnet if present.

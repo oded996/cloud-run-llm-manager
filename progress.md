@@ -11,6 +11,25 @@ This document serves as a running changelog to track the progress of the Cloud R
 - **Be Specific but Concise:** Briefly describe each change. For bugs, include a short summary of the issue and the solution.
 - **Update Chronologically:** Always add the newest entries at the top of the file.
 
+## 2025-11-20
+
+### Implemented Features
+
+- **ZML Support:**
+    - Added **ZML (Zig Machine Learning)** as a new serving framework option for Hugging Face models.
+    - Implemented a toggle in the "Deploy Service" view to allow users to select between vLLM and ZML.
+    - Configured ZML deployments to use the `zmlai/llmd` container image, with correct arguments (`--model-dir`) and mount paths (`/model`).
+    - Updated the `ChatCard` component to support ZML's OpenAI-compatible API endpoints (`/v1/models`, `/v1/completions`).
+
+### Bug Fixes & UX Improvements
+
+- **Service Editing Fixes:**
+    - Fixed a bug where editing an existing ZML service failed to correctly identify the model ID and bucket name. The logic now correctly parses ZML-specific arguments and extracts the bucket name directly from the volume configuration.
+- **Deployment Improvements:**
+    - Enforced lowercase naming for all generated Cloud Run service names to comply with platform requirements and prevent deployment errors.
+- **Type Safety:**
+    - Resolved a TypeScript error by adding the missing `volumes` property to the `Service` interface in the frontend code.
+
 ## 2025-10-30
 
 ### Implemented Features
