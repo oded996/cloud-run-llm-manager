@@ -103,15 +103,31 @@ async function deployService(payload: any, sendEvent: (data: any) => void) {
 
     
 
-                if (isAlpha) {
+                                                if (isAlpha) {
 
     
 
-                    serviceConfig.launchStage = 'ALPHA';
+                                
 
     
 
-                }
+                                                    serviceConfig.launchStage = 'ALPHA';
+
+    
+
+                                
+
+    
+
+                                                }
+
+    
+
+                                
+
+    
+
+                
 
     
 

@@ -1090,6 +1090,7 @@ export const DeployServiceView = ({ project, model: initialModel, bucket: initia
              setContainerPort('8000');
              setArgs([
                  { id: 1, key: '--model-dir', value: `/model/${model.id}` },
+                 { id: 2, key: '--backend', value: 'triton' },
              ]);
              setEnvVars([]);
         } else { // Default to vLLM for huggingface

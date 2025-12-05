@@ -1,0 +1,5 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['pull', 'zmlai/llmd:latest']
+options:
+  diskSizeGb: 100

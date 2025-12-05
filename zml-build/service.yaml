@@ -1,0 +1,46 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: zml-copy-experiment
+  namespace: wlhe-cr
+  labels:
+    cloud.googleapis.com/location: us-central1
+  annotations:
+    run.googleapis.com/client-name: cloud-console
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/startup-cpu-boost: "true"
+        run.googleapis.com/cloud-sql-instances: "" # No SQL instances
+        run.googleapis.com/vpc-access-egress: "all-traffic" # Assuming default or no VPC
+        run.googleapis.com/vpc-access-connector: "" # Assuming no VPC connector
+    spec:
+      containerConcurrency: 8
+      timeoutSeconds: 3600 # Default to 1 hour timeout, adjust as needed
+      serviceAccountName: default # Use default service account or specify one if needed
+      containers:
+      - image: gcr.io/wlhe-cr/zml-dynamic-model:latest
+        name: zml-container
+        resources:
+          limits:
+            cpu: "8"
+            memory: "32Gi"
+            nvidia.com/gpu: "1"
+          accelerator: nvidia-l4 # Specify GPU type
+        env:
+        - name: MODEL_GCS_PATH
+          value: "/model/meta-llama/Meta-Llama-3-8B-Instruct"
+        command: ["/entrypoint.sh"] # Use our custom entrypoint
+        args: ["/model/meta-llama/Meta-Llama-3-8B-Instruct", "--backend=triton"] # Arguments for the entrypoint script
+        volumeMounts:
+        - name: gcs-bucket-mount
+          mountPath: /model
+      volumes:
+      - name: gcs-bucket-mount
+        cloudStorage:
+          bucket: odeds-test-ollama-cache-us-c1
+          readOnly: true
+  traffic:
+  - percent: 100
+    latestRevision: true

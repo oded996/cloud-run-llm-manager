@@ -46,7 +46,7 @@ export async function POST(request: Request) {
         requestConfig.data = payload;
     }
 
-    const proxyResponse = await client.request(requestConfig);
+    const proxyResponse = await client.request(requestConfig as any);
 
     console.log(`[CHAT_PROXY] Received streaming response with status: ${proxyResponse.status}`);
 
